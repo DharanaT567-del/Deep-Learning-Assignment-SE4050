@@ -1,0 +1,16 @@
+# Core Deep Learning Framework
+tensorflow>=2.15.0
+keras>=3.0.0
+
+# Scientific computing and data processing
+numpy>=1.24.0
+scikit-learn>=1.3.0
+pandas>=2.0.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Notebook and interactive environment (optional)
+jupyterlab>=4.0.0
+ipykernel>=6.25.0

@@ -1,0 +1,32 @@
+{
+  "model": {
+    "seq_len": 128,
+    "num_features": 9,
+    "d_model": 64,
+    "num_heads": 4,
+    "key_dim": 16,
+    "num_layers": 2,
+    "d_ff": 128,
+    "ffn_activation": "gelu",
+    "dropout_rate": 0.2,
+    "dense_units": 64,
+    "num_classes": 6
+  },
+  "training": {
+    "learning_rate": 0.001,
+    "batch_size": 64,
+    "epochs": 60,
+    "seed": 42,
+    "early_stopping_patience": 10,
+    "reduce_lr_patience": 5,
+    "reduce_lr_factor": 0.5,
+    "min_lr": 1e-6
+  },
+  "data": {
+    "npz_path": "data/uci_har_processed.npz",
+    "normalize": false
+  },
+  "output": {
+    "base_dir": "outputs/transformer"
+  }
+}
