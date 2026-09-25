@@ -126,7 +126,9 @@ def download_uci_har(dest_dir: PathLike = DEFAULT_DATA_DIR, force: bool = False)
         tmp_path = archive_path.with_suffix(".zip.part")
         print(f"[Download] Fetching {UCI_HAR_URL} ...")
         try:
-            urllib.request.urlretrieve(UCI_HAR_URL, tmp_path)
+            req = urllib.request.Request(UCI_HAR_URL, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req) as resp, open(tmp_path, "wb") as out_file:
+                shutil.copyfileobj(resp, out_file)
         except Exception as exc:
             tmp_path.unlink(missing_ok=True)
             raise RuntimeError(

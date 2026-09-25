@@ -292,6 +292,73 @@ class TestTrainingPipeline(unittest.TestCase):
         self.assertIn("val_subjects", meta)
         self.assertIn("duration_seconds", meta)
 
+    def test_09_predict_single_window(self) -> None:
+        """Verify single window inference with shape handling and class name output."""
+        from src.models.transformer import predict_single_window
+
+        model = build_transformer_classifier(
+            seq_len=128,
+            num_features=9,
+            d_model=32,
+            num_heads=2,
+            key_dim=16,
+            num_layers=1,
+            num_classes=6,
+        )
+        compile_transformer_model(model)
+
+        # Test with 2D shape (128, 9)
+        single_window_2d = np.random.randn(128, 9).astype(np.float32)
+        pred_class, act_name, conf, probs = predict_single_window(model, single_window_2d)
+
+        self.assertIsInstance(pred_class, int)
+        self.assertIn(pred_class, range(6))
+        self.assertIsInstance(act_name, str)
+        self.assertTrue(0.0 <= conf <= 1.0)
+        self.assertEqual(probs.shape, (6,))
+        self.assertAlmostEqual(float(np.sum(probs)), 1.0, places=4)
+
+        # Test with 3D shape (1, 128, 9)
+        single_window_3d = np.random.randn(1, 128, 9).astype(np.float32)
+        p_c, a_n, c_f, pr = predict_single_window(model, single_window_3d)
+        self.assertIn(p_c, range(6))
+
+        # Test invalid shape raises ValueError
+        with self.assertRaises(ValueError):
+            predict_single_window(model, np.random.randn(64, 9).astype(np.float32))
+
+    def test_10_evaluate_transformer_on_test(self) -> None:
+        """Verify test evaluation metrics calculation and artifact generation."""
+        from src.train_transformer import evaluate_transformer_on_test
+
+        model = build_transformer_classifier(
+            seq_len=128,
+            num_features=9,
+            d_model=32,
+            num_heads=2,
+            key_dim=16,
+            num_layers=1,
+            num_classes=6,
+        )
+        compile_transformer_model(model)
+
+        data = generate_synthetic_har_data(
+            n_train_windows_per_class=5,
+            n_val_windows_per_class=3,
+            n_test_windows_per_class=3,
+            seed=42,
+        )
+
+        eval_dir = os.path.join(self.temp_dir, "eval_test")
+        metrics = evaluate_transformer_on_test(model, data, run_dir=eval_dir, save_artifacts=True)
+
+        self.assertIn("test_accuracy", metrics)
+        self.assertIn("test_macro_f1", metrics)
+        self.assertIn("test_weighted_f1", metrics)
+        self.assertIn("confusion_matrix", metrics)
+        self.assertTrue(os.path.exists(os.path.join(eval_dir, "test_metrics.json")))
+        self.assertTrue(os.path.exists(os.path.join(eval_dir, "predictions.npz")))
+
 
 if __name__ == "__main__":
     unittest.main()

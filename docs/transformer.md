@@ -135,21 +135,23 @@ outputs/transformer/run_YYYYMMDD_HHMMSS/
 {
   "author": "Dharana",
   "component": "Transformer Encoder Classifier",
-  "timestamp_start": "2026-09-23T12:00:00.000000",
-  "timestamp_end": "2026-09-23T12:02:15.000000",
-  "duration_seconds": 135.2,
-  "epochs_trained": 42,
-  "total_parameters": 68550,
-  "trainable_parameters": 68550,
+  "timestamp_start": "2026-09-25T16:15:24.000000",
+  "timestamp_end": "2026-09-25T16:17:15.000000",
+  "duration_seconds": 110.86,
+  "epochs_trained": 3,
+  "seconds_per_epoch": 36.95,
+  "total_parameters": 80454,
+  "trainable_parameters": 80454,
   "non_trainable_parameters": 0,
-  "best_val_loss": 0.1842,
-  "best_val_loss_epoch": 32,
-  "final_val_accuracy": 0.9412,
+  "best_val_loss": 0.4983,
+  "best_val_loss_epoch": 1,
+  "final_val_accuracy": 0.8521,
   "seed": 42,
-  "train_subjects": [1, 3, 5, 6, 7, 8, 11, 14, 15, 16, 17, 19, 21, 22, 23, 25, 26, 27, 28, 29, 30],
-  "val_subjects": [2, 4, 9, 10, 12, 13],
-  "num_train_samples": 5881,
-  "num_val_samples": 1471,
+  "train_subjects": [1, 5, 6, 7, 8, 11, 14, 15, 17, 19, 21, 25, 26, 27, 28, 29, 30],
+  "val_subjects": [3, 16, 22, 23],
+  "num_train_samples": 5952,
+  "num_val_samples": 1400,
+  "data_source": "real_npz",
   "system_info": { ... }
 }
 ```
@@ -158,54 +160,59 @@ outputs/transformer/run_YYYYMMDD_HHMMSS/
 
 ## 6. Integration Instructions for Team Members
 
-### For Member 3 (Data Loader Integration)
-Export the preprocessed dataset as an NPZ archive or pass a data dictionary directly to `train_transformer_pipeline()`:
+### For Member 3 (Shared Data Loader)
+Member 3's centralized loader (`src/data/uci_har_loader.py`) prepares `data/uci_har_processed.npz` with 17 training subjects, 4 validation subjects, and 9 test subjects. Dharana's pipeline consumes this directly:
 ```python
 from src.train_transformer import train_transformer_pipeline, load_config
+from src.data_contract import load_har_npz
 
-# Using dictionary from Member 3's shared loader:
-dataset = {
-    "X_train": X_train,          # (N_train, 128, 9)
-    "y_train": y_train,          # (N_train,)
-    "subject_train": sub_train,  # (N_train,)
-    "X_val": X_val,              # (N_val, 128, 9)
-    "y_val": y_val,              # (N_val,)
-    "subject_val": sub_val,      # (N_val,)
-}
+# Load preprocessed contract dict
+data = load_har_npz("data/uci_har_processed.npz")
 config = load_config("configs/transformer.json")
-model, metadata, run_dir = train_transformer_pipeline(config, data=dataset)
+model, metadata, run_dir = train_transformer_pipeline(config, data=data)
 ```
 
-### For Member 4 (Shared Evaluation Integration)
-Load the saved model and evaluate on the test split:
+### For Member 4 (Shared Benchmark Evaluation)
+Load the saved `.keras` model and compute activity probability matrix and discrete predictions:
 ```python
-from src.models.transformer import load_transformer_model, predict_transformer
+from src.models.transformer import load_transformer_model, predict_transformer, predict_single_window
+from src.train_transformer import evaluate_transformer_on_test
 
 # 1. Load trained model
 model = load_transformer_model("outputs/transformer/run_xxx/best_model.keras")
 
 # 2. Get activity probability matrix (N_test, 6)
 y_probs = predict_transformer(model, X_test)
-
-# 3. Obtain discrete class predictions (0-5)
 y_pred = np.argmax(y_probs, axis=-1)
+
+# 3. Or run the standard evaluation helper
+metrics = evaluate_transformer_on_test(model, data, run_dir="outputs/transformer/run_xxx")
+
+# 4. Single-window real-time inference
+pred_idx, act_name, conf, probs = predict_single_window(model, X_test[0])
 ```
 
 ---
 
 ## 7. Execution & CLI Commands
 
-### 1. Run Unit & Contract Tests
+### 1. Build Shared Dataset
+```bash
+python -m src.data.uci_har_loader --download
+```
+
+### 2. Run Complete Unit Test Suite
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-### 2. Run Synthetic Smoke Test
+### 3. Run Lightweight Smoke Test
 ```bash
 python src/train_transformer.py --smoke-test
 ```
 
-### 3. Run Full Training (with preprocessed NPZ dataset)
+### 4. Run Full Training & Test Evaluation
 ```bash
-python src/train_transformer.py --config configs/transformer.json --data-path data/uci_har_processed.npz
+python src/train_transformer.py --config configs/transformer.json --data-path data/uci_har_processed.npz --eval-test
 ```
+

@@ -394,3 +394,41 @@ def predict_transformer(
             f"Expected input array shaped (N, 128, 9), but received shape {x_arr.shape}."
         )
     return model.predict(x_arr, batch_size=batch_size, verbose=0)
+
+
+def predict_single_window(
+    model: keras.Model,
+    window: np.ndarray,
+) -> Tuple[int, str, float, np.ndarray]:
+    """Classify a single (128, 9) sensor window and return prediction details.
+
+    Parameters:
+        model: Trained Keras Transformer model.
+        window: Array shaped (128, 9) or (1, 128, 9).
+
+    Returns:
+        Tuple containing:
+            - predicted_class: int class index (0-5)
+            - activity_name: str descriptive name
+            - confidence: float probability (0.0 - 1.0)
+            - probabilities: np.ndarray 1D probability distribution of shape (6,)
+    """
+    arr = np.asarray(window, dtype=np.float32)
+    if arr.ndim == 2:
+        if arr.shape != (128, 9):
+            raise ValueError(f"Expected 2D window shaped (128, 9), got {arr.shape}.")
+        arr = np.expand_dims(arr, axis=0)
+    elif arr.ndim == 3:
+        if arr.shape != (1, 128, 9):
+            raise ValueError(f"Expected single 3D window shaped (1, 128, 9), got {arr.shape}.")
+    else:
+        raise ValueError(f"Window must be 2D (128, 9) or 3D (1, 128, 9), got shape {arr.shape}.")
+
+    from src.data_contract import ACTIVITY_LABEL_MAPPING
+
+    probs = predict_transformer(model, arr, batch_size=1)[0]
+    pred_idx = int(np.argmax(probs))
+    conf = float(probs[pred_idx])
+    act_name = ACTIVITY_LABEL_MAPPING.get(pred_idx, f"CLASS_{pred_idx}")
+    return pred_idx, act_name, conf, probs
+

@@ -273,13 +273,17 @@ def train_transformer_pipeline(
     best_val_loss_epoch = int(np.argmin(val_loss_hist) + 1) if val_loss_hist else None
     final_val_acc = float(val_acc_hist[-1]) if val_acc_hist else None
 
+    epochs_trained = len(history_obj.epoch)
+    seconds_per_epoch = round(duration_seconds / max(1, epochs_trained), 3)
+
     metadata: Dict[str, Any] = {
         "author": "Dharana",
         "component": "Transformer Encoder Classifier",
         "timestamp_start": start_iso,
         "timestamp_end": end_iso,
         "duration_seconds": duration_seconds,
-        "epochs_trained": len(history_obj.epoch),
+        "epochs_trained": epochs_trained,
+        "seconds_per_epoch": seconds_per_epoch,
         "total_parameters": total_params,
         "trainable_parameters": trainable_params,
         "non_trainable_parameters": non_trainable_params,
@@ -291,6 +295,7 @@ def train_transformer_pipeline(
         "val_subjects": val_subjects_list,
         "num_train_samples": len(X_train),
         "num_val_samples": len(X_val),
+        "data_source": "real_npz" if data.get("subject_test", None) is not None and len(data.get("subject_test", [])) == 2947 else "custom_or_synthetic",
         "system_info": get_system_metadata(),
         "model_file": os.path.basename(best_model_path),
         "history_file": os.path.basename(history_json_path),
@@ -301,13 +306,102 @@ def train_transformer_pipeline(
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
 
-    print(f"\n[Run Completed] Duration: {duration_seconds}s | Best Val Loss: {best_val_loss} (Epoch {best_val_loss_epoch})")
+    print(f"\n[Run Completed] Duration: {duration_seconds}s ({seconds_per_epoch}s/epoch) | Best Val Loss: {best_val_loss} (Epoch {best_val_loss_epoch})")
     print(f"  Artifacts saved to: {run_dir}")
     print(f"  - Model:     {best_model_path}")
     print(f"  - History:   {history_json_path}, {history_csv_path}")
     print(f"  - Metadata:  {metadata_path}")
 
     return loaded_best_model, metadata, run_dir
+
+
+def evaluate_transformer_on_test(
+    model: keras.Model,
+    data: Dict[str, np.ndarray],
+    run_dir: Optional[str] = None,
+    save_artifacts: bool = True,
+) -> Dict[str, Any]:
+    """Evaluate trained Transformer on held-out test split.
+
+    Calculates accuracy, macro F1, weighted F1, per-class metrics, and confusion matrix.
+    Saves test_metrics.json and predictions.npz into run_dir.
+
+    Parameters:
+        model: Trained Keras Transformer model.
+        data: Data dictionary containing 'X_test', 'y_test', and optionally 'subject_test'.
+        run_dir: Optional directory where evaluation artifacts are saved.
+        save_artifacts: Whether to write test_metrics.json and predictions.npz.
+
+    Returns:
+        Dictionary of calculated evaluation metrics.
+    """
+    from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
+    from src.data_contract import ACTIVITY_LABEL_MAPPING
+
+    if "X_test" not in data or "y_test" not in data:
+        raise ValueError("Data dictionary must contain 'X_test' and 'y_test' for evaluation.")
+
+    X_test = data["X_test"]
+    y_test = data["y_test"]
+    subject_test = data.get("subject_test", None)
+
+    y_probs = predict_transformer(model, X_test)
+    y_pred = np.argmax(y_probs, axis=-1)
+
+    acc = float(accuracy_score(y_test, y_pred))
+    macro_f1 = float(f1_score(y_test, y_pred, average="macro"))
+    weighted_f1 = float(f1_score(y_test, y_pred, average="weighted"))
+
+    class_names = [ACTIVITY_LABEL_MAPPING[i] for i in range(len(ACTIVITY_LABEL_MAPPING))]
+    cm = confusion_matrix(y_test, y_pred)
+    clf_report_dict = classification_report(
+        y_test, y_pred, target_names=class_names, output_dict=True, digits=4
+    )
+    clf_report_str = classification_report(
+        y_test, y_pred, target_names=class_names, digits=4
+    )
+
+    metrics = {
+        "author": "Dharana",
+        "component": "Transformer Encoder",
+        "num_test_samples": int(len(y_test)),
+        "test_subjects": sorted(int(s) for s in np.unique(subject_test)) if subject_test is not None else [],
+        "test_accuracy": acc,
+        "test_macro_f1": macro_f1,
+        "test_weighted_f1": weighted_f1,
+        "confusion_matrix": cm.tolist(),
+        "class_names": class_names,
+        "classification_report": clf_report_dict,
+    }
+
+    print("\n" + "=" * 60)
+    print("TRANSFORMER HELD-OUT TEST EVALUATION RESULTS")
+    print("=" * 60)
+    print(f"Test Accuracy:  {acc * 100:.2f}%")
+    print(f"Test Macro F1:  {macro_f1:.4f}")
+    print(f"Test Weighted F1: {weighted_f1:.4f}")
+    print("\nClassification Report:\n")
+    print(clf_report_str)
+
+    if save_artifacts and run_dir is not None:
+        os.makedirs(run_dir, exist_ok=True)
+        metrics_path = os.path.join(run_dir, "test_metrics.json")
+        with open(metrics_path, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, indent=2)
+
+        preds_npz_path = os.path.join(run_dir, "predictions.npz")
+        np.savez_compressed(
+            preds_npz_path,
+            y_test=y_test,
+            y_pred=y_pred,
+            y_probs=y_probs,
+            subject_test=subject_test if subject_test is not None else np.array([]),
+        )
+        print(f"[Artifacts] Saved evaluation results to {run_dir}:")
+        print(f"  - {metrics_path}")
+        print(f"  - {preds_npz_path}")
+
+    return metrics
 
 
 def main() -> None:
@@ -362,6 +456,11 @@ def main() -> None:
         action="store_true",
         help="Run short synthetic verification smoke test (2 epochs)",
     )
+    parser.add_argument(
+        "--eval-test",
+        action="store_true",
+        help="Run evaluation on test split after training completes",
+    )
 
     args = parser.parse_args()
 
@@ -392,9 +491,16 @@ def main() -> None:
             seed=config["training"]["seed"],
         )
     else:
-        data = None
+        npz_path = config.get("data", {}).get("npz_path", "data/uci_har_processed.npz")
+        if os.path.exists(npz_path):
+            data = load_har_npz(npz_path, normalize=bool(config.get("data", {}).get("normalize", False)))
+        else:
+            data = None
 
-    train_transformer_pipeline(config, data=data, run_dir=args.output_dir)
+    best_model, meta, run_dir = train_transformer_pipeline(config, data=data, run_dir=args.output_dir)
+
+    if args.eval_test and data is not None and "X_test" in data:
+        evaluate_transformer_on_test(best_model, data=data, run_dir=run_dir)
 
 
 if __name__ == "__main__":
