@@ -7,8 +7,10 @@ This script manages:
 4. Keras callbacks: EarlyStopping, ModelCheckpoint (.keras), ReduceLROnPlateau, CSVLogger.
 5. Structured run outputs: best_model.keras, history.json, history.csv, config.json, run_metadata.json.
 6. Support for both real NPZ data and synthetic smoke validation.
+7. Optional train-only data augmentation (jitter, per-channel scaling, time shift).
 
 The test split is never used here: training and model selection use train/val only.
+Augmentation is applied to training batches only; validation windows are never changed.
 """
 
 from __future__ import annotations
@@ -55,6 +57,36 @@ def set_seed(seed: int = 42) -> None:
     tf.random.set_seed(seed)
 
 
+def augment_batch(
+    x: tf.Tensor,
+    jitter_std: float = 0.05,
+    scale_std: float = 0.1,
+    max_shift: int = 8,
+) -> tf.Tensor:
+    """Randomly perturb a batch of sensor windows, keeping its shape (N, T, C).
+
+    - Jitter: add Gaussian noise with std `jitter_std` to every reading.
+    - Scaling: multiply each channel of each window by a factor drawn from N(1, scale_std).
+    - Time shift: circularly shift each window by a random number of steps in [-max_shift, max_shift].
+
+    Inputs are already standardized, so the stds are in units of one channel std.
+    Setting all three to 0 returns the input unchanged.
+    """
+    x = tf.convert_to_tensor(x, dtype=tf.float32)
+    shape = tf.shape(x)
+    n, t, c = shape[0], shape[1], shape[2]
+
+    if jitter_std > 0:
+        x = x + tf.random.normal(shape, stddev=jitter_std)
+    if scale_std > 0:
+        x = x * tf.random.normal((n, 1, c), mean=1.0, stddev=scale_std)
+    if max_shift > 0:
+        shifts = tf.random.uniform((n, 1), minval=-max_shift, maxval=max_shift + 1, dtype=tf.int32)
+        idx = tf.math.floormod(tf.range(t)[tf.newaxis, :] - shifts, t)
+        x = tf.gather(x, idx, batch_dims=1)
+    return x
+
+
 def get_system_metadata() -> Dict[str, Any]:
     """Capture environment, framework versions, and hardware device information."""
     devices = tf.config.list_physical_devices()
@@ -82,6 +114,7 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
             "dropout": 0.4,
             "dense_units": 64,
             "num_classes": 6,
+            "pooling": "last",
         },
         "training": {
             "learning_rate": 0.0005,
@@ -92,6 +125,10 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
             "reduce_lr_patience": 5,
             "reduce_lr_factor": 0.5,
             "min_lr": 1e-6,
+            "augment": False,
+            "aug_jitter_std": 0.05,
+            "aug_scale_std": 0.1,
+            "aug_max_shift": 8,
         },
         "data": {
             "npz_path": "data/uci_har_processed.npz",
@@ -190,6 +227,7 @@ def train_bilstm_pipeline(
         dense_units=int(model_cfg.get("dense_units", 64)),
         learning_rate=learning_rate,
         seed=seed,
+        pooling=str(model_cfg.get("pooling", "last")),
     )
 
     total_params = int(model.count_params())
@@ -233,20 +271,47 @@ def train_bilstm_pipeline(
     # 5. Execute Training
     batch_size = int(train_cfg.get("batch_size", 64))
     epochs = int(train_cfg.get("epochs", 60))
+    augment = bool(train_cfg.get("augment", False))
 
     start_time = time.time()
     start_iso = datetime.datetime.now().isoformat()
 
-    print(f"[Training] Starting training: epochs={epochs}, batch_size={batch_size}, lr={learning_rate}...")
-    history_obj = model.fit(
-        X_train,
-        y_train,
-        validation_data=(X_val, y_val),
-        epochs=epochs,
-        batch_size=batch_size,
-        callbacks=callbacks,
-        verbose=verbose,
+    print(
+        f"[Training] Starting training: epochs={epochs}, batch_size={batch_size}, "
+        f"lr={learning_rate}, augment={augment}..."
     )
+    if augment:
+        # Augment training batches only; validation data is passed through unchanged
+        jitter_std = float(train_cfg.get("aug_jitter_std", 0.05))
+        scale_std = float(train_cfg.get("aug_scale_std", 0.1))
+        max_shift = int(train_cfg.get("aug_max_shift", 8))
+        train_ds = (
+            tf.data.Dataset.from_tensor_slices((X_train.astype(np.float32), y_train))
+            .shuffle(len(X_train), seed=seed, reshuffle_each_iteration=True)
+            .batch(batch_size)
+            .map(
+                lambda xb, yb: (augment_batch(xb, jitter_std, scale_std, max_shift), yb),
+                num_parallel_calls=tf.data.AUTOTUNE,
+            )
+            .prefetch(tf.data.AUTOTUNE)
+        )
+        history_obj = model.fit(
+            train_ds,
+            validation_data=(X_val, y_val),
+            epochs=epochs,
+            callbacks=callbacks,
+            verbose=verbose,
+        )
+    else:
+        history_obj = model.fit(
+            X_train,
+            y_train,
+            validation_data=(X_val, y_val),
+            epochs=epochs,
+            batch_size=batch_size,
+            callbacks=callbacks,
+            verbose=verbose,
+        )
     end_time = time.time()
     end_iso = datetime.datetime.now().isoformat()
     duration_seconds = round(end_time - start_time, 2)
@@ -295,6 +360,8 @@ def train_bilstm_pipeline(
         "val_accuracy_at_best_epoch": best_val_acc,
         "final_val_accuracy": final_val_acc,
         "seed": seed,
+        "pooling": str(model_cfg.get("pooling", "last")),
+        "augment": augment,
         "data_source": data_source,
         "train_subjects": train_subjects_list,
         "val_subjects": val_subjects_list,

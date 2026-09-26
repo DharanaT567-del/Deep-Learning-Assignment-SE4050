@@ -11,6 +11,11 @@ Architecture:
     Dense layer: 64 units, ReLU
     Softmax output: 6 units (classes 0-5)
 
+Pooling options (how the last BiLSTM layer summarises the window):
+    "last"      final states only (default, the architecture above)
+    "avg"       average over all 128 time steps (no extra parameters)
+    "attention" learned softmax weights over all 128 time steps (+129 parameters)
+
 Design notes:
     - Activities are defined by how motion evolves over time, which is what a
       recurrent network's gated memory models.
@@ -23,7 +28,7 @@ Design notes:
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Any, Dict, Tuple
 
 import numpy as np
 
@@ -36,6 +41,61 @@ except ImportError:
     from tensorflow import keras
     from tensorflow.keras import layers, models
 
+POOLING_OPTIONS = ("last", "avg", "attention")
+
+
+# Register serializable decorator helper
+def _register_serializable(cls):
+    """Register custom layer for Keras serialization across Keras 2/3 and TF."""
+    try:
+        if hasattr(keras, "saving") and hasattr(keras.saving, "register_keras_serializable"):
+            keras.saving.register_keras_serializable(package="har_bilstm")(cls)
+    except Exception:
+        pass
+
+    try:
+        import tensorflow as tf
+        if hasattr(tf.keras.utils, "register_keras_serializable"):
+            tf.keras.utils.register_keras_serializable(package="har_bilstm")(cls)
+    except Exception:
+        pass
+    return cls
+
+
+@_register_serializable
+class TemporalAttentionPooling(layers.Layer):
+    """Attention pooling over time: a learned weighted average of all time steps.
+
+    A Dense(1) layer scores each time step, a softmax over time turns the scores
+    into weights that sum to 1, and the output is the weighted sum of the steps.
+    Input (N, T, F) -> output (N, F). Adds F + 1 parameters (129 for F = 128).
+    """
+
+    def build(self, input_shape) -> None:
+        """Create the per-time-step scoring layer."""
+        self.score_dense = layers.Dense(1, name="attention_score")
+        self.score_dense.build(input_shape)
+        super().build(input_shape)
+
+    def attention_weights(self, inputs):
+        """Return the softmax weights over time, shaped (N, T)."""
+        scores = self.score_dense(inputs)  # (N, T, 1)
+        weights = keras.ops.softmax(scores, axis=1)
+        return keras.ops.squeeze(weights, axis=-1)
+
+    def call(self, inputs):
+        """Weighted sum of the time steps."""
+        weights = keras.ops.expand_dims(self.attention_weights(inputs), axis=-1)
+        return keras.ops.sum(inputs * weights, axis=1)
+
+    def compute_output_shape(self, input_shape):
+        """(N, T, F) -> (N, F)."""
+        return (input_shape[0], input_shape[-1])
+
+    def get_config(self) -> Dict[str, Any]:
+        """Serialize layer configuration (no extra constructor arguments)."""
+        return super().get_config()
+
 
 def build_bilstm_model(
     input_shape: Tuple[int, int] = (128, 9),
@@ -46,6 +106,7 @@ def build_bilstm_model(
     dense_units: int = 64,
     learning_rate: float = 5e-4,
     seed: int = 42,
+    pooling: str = "last",
     name: str = "har_bilstm_classifier",
 ) -> keras.Model:
     """Build and compile the stacked BiLSTM classifier for HAR.
@@ -53,8 +114,10 @@ def build_bilstm_model(
     Architecture summary:
         1. Input: (seq_len, num_features) -> e.g. (128, 9)
         2. n_layers x [Bidirectional(LSTM(lstm_units)) -> Dropout(dropout)]
-           All but the last layer return the full sequence (128, 2 * lstm_units);
-           the last returns only its final states concatenated (2 * lstm_units,).
+           All but the last layer return the full sequence (128, 2 * lstm_units).
+           With pooling="last" the last layer returns only its final states
+           (2 * lstm_units,); otherwise it returns the full sequence, which is
+           then pooled over time (average or attention) to (2 * lstm_units,).
         3. Dense(dense_units, relu)
         4. Dense(n_classes, softmax) -> Activity probabilities
 
@@ -67,6 +130,8 @@ def build_bilstm_model(
         dense_units: Units in the pre-classification dense layer (default: 64).
         learning_rate: Adam learning rate (default: 5e-4).
         seed: Seed for weight initialization and dropout masks (default: 42).
+        pooling: How the last layer summarises the window: "last", "avg" or
+            "attention" (default: "last").
         name: Name of the Keras model.
 
     Returns:
@@ -74,6 +139,8 @@ def build_bilstm_model(
     """
     if n_layers < 1:
         raise ValueError(f"n_layers must be at least 1, got {n_layers}.")
+    if pooling not in POOLING_OPTIONS:
+        raise ValueError(f"pooling must be one of {POOLING_OPTIONS}, got '{pooling}'.")
 
     # Makes weight initialization reproducible for a given seed
     keras.utils.set_random_seed(int(seed))
@@ -86,11 +153,17 @@ def build_bilstm_model(
     for i in range(n_layers):
         is_last = i == n_layers - 1
         x = layers.Bidirectional(
-            layers.LSTM(int(lstm_units), return_sequences=not is_last),
+            layers.LSTM(int(lstm_units), return_sequences=not is_last or pooling != "last"),
             merge_mode="concat",
             name=f"bilstm_{i + 1}",
         )(x)
         x = layers.Dropout(float(dropout), name=f"bilstm_dropout_{i + 1}")(x)
+
+    # Pool the last layer's sequence over time
+    if pooling == "avg":
+        x = layers.GlobalAveragePooling1D(name="temporal_avg_pool")(x)
+    elif pooling == "attention":
+        x = TemporalAttentionPooling(name="temporal_attention_pool")(x)
 
     # 3. Classification Head
     x = layers.Dense(int(dense_units), activation="relu", name="dense_classification_head")(x)
@@ -126,7 +199,7 @@ def compile_bilstm_model(
 
 
 def load_bilstm_model(filepath: str) -> keras.Model:
-    """Load a saved .keras BiLSTM model (built-in layers only, kept for API symmetry).
+    """Load a saved .keras BiLSTM model, including the custom attention pooling layer.
 
     Parameters:
         filepath: Path to the saved .keras model file.
@@ -134,7 +207,10 @@ def load_bilstm_model(filepath: str) -> keras.Model:
     Returns:
         keras.Model: Loaded Keras model ready for inference or fine-tuning.
     """
-    return models.load_model(filepath)
+    return models.load_model(
+        filepath,
+        custom_objects={"TemporalAttentionPooling": TemporalAttentionPooling},
+    )
 
 
 def predict_bilstm(

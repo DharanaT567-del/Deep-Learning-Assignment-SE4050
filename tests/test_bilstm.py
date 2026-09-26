@@ -9,6 +9,10 @@ Mirrors tests/test_transformer.py. Verifies:
 6. Malformed inputs are rejected by predict_bilstm and the pipeline.
 7. NPZ normalization is fitted on the train split only.
 8. End-to-end smoke training writes all artifacts and never reads X_test.
+9. Attention pooling builds, adds 129 parameters, and reloads with identical predictions.
+10. Average pooling adds no parameters; an unknown pooling option is rejected.
+11. augment_batch keeps shape and is the identity when all settings are 0.
+12. Augmented training never changes validation data and never reads X_test.
 """
 
 from __future__ import annotations
@@ -40,7 +44,7 @@ from src.models.bilstm import (
     load_bilstm_model,
     predict_bilstm,
 )
-from src.train_bilstm import load_config, train_bilstm_pipeline
+from src.train_bilstm import augment_batch, load_config, train_bilstm_pipeline
 
 
 def small_pipeline_config(base_dir: str) -> dict:
@@ -159,6 +163,41 @@ class TestBiLSTMModel(unittest.TestCase):
         helper_preds = predict_bilstm(reloaded_model, test_input)
         np.testing.assert_allclose(original_preds, helper_preds, rtol=1e-5, atol=1e-5)
 
+    def test_09_attention_pooling_forward_and_reload(self) -> None:
+        """Attention pooling builds, adds 129 parameters, and reloads with identical predictions."""
+        last_model = build_bilstm_model(lstm_units=64, n_layers=2, dense_units=64)
+        model = build_bilstm_model(lstm_units=64, n_layers=2, dense_units=64, pooling="attention")
+
+        # Dense(1) scorer over 2 * 64 = 128 features: 128 weights + 1 bias
+        self.assertEqual(model.count_params(), last_model.count_params() + 129)
+
+        test_input = np.random.randn(4, self.seq_len, self.num_features).astype(np.float32)
+        original_preds = model(test_input, training=False).numpy()
+        self.assertEqual(original_preds.shape, (4, self.num_classes))
+        np.testing.assert_allclose(np.sum(original_preds, axis=-1), np.ones(4), rtol=1e-5, atol=1e-5)
+
+        # Attention weights are a distribution over the 128 time steps
+        pool = model.get_layer("temporal_attention_pool")
+        sequence = keras.Model(model.input, model.get_layer("bilstm_dropout_2").output)(test_input)
+        weights = keras.ops.convert_to_numpy(pool.attention_weights(sequence))
+        self.assertEqual(weights.shape, (4, self.seq_len))
+        np.testing.assert_allclose(weights.sum(axis=-1), np.ones(4), rtol=1e-5, atol=1e-5)
+
+        save_path = os.path.join(self.temp_dir, "test_bilstm_attention.keras")
+        model.save(save_path)
+        reloaded_preds = load_bilstm_model(save_path)(test_input, training=False).numpy()
+        np.testing.assert_allclose(original_preds, reloaded_preds, rtol=1e-5, atol=1e-5)
+
+    def test_10_avg_pooling_and_invalid_option(self) -> None:
+        """Average pooling adds no parameters; an unknown pooling option is rejected."""
+        last_model = build_bilstm_model(lstm_units=16, n_layers=2, dense_units=16)
+        avg_model = build_bilstm_model(lstm_units=16, n_layers=2, dense_units=16, pooling="avg")
+        self.assertEqual(avg_model.count_params(), last_model.count_params())
+        self.assertEqual(tuple(avg_model.get_layer("bilstm_2").output.shape), (None, self.seq_len, 32))
+
+        with self.assertRaises(ValueError):
+            build_bilstm_model(lstm_units=8, n_layers=1, dense_units=8, pooling="max")
+
 
 class TestBiLSTMDataContract(unittest.TestCase):
     """Test suite for data integrity and leakage prevention in the BiLSTM pipeline."""
@@ -185,6 +224,9 @@ class TestBiLSTMDataContract(unittest.TestCase):
         self.assertEqual(config["model"]["dropout"], 0.4)
         self.assertEqual(config["training"]["learning_rate"], 0.0005)
         self.assertEqual(config["output"]["base_dir"], "outputs/bilstm")
+        # Improvements are opt-in: the default config is the original baseline
+        self.assertEqual(config["model"]["pooling"], "last")
+        self.assertFalse(config["training"]["augment"])
 
     def test_05_rejection_of_subject_leakage(self) -> None:
         """The training pipeline refuses to train on overlapping train/val subjects."""
@@ -281,6 +323,51 @@ class TestBiLSTMTrainingPipeline(unittest.TestCase):
         # Reloaded best model still predicts valid probabilities
         preds = predict_bilstm(model, data["X_val"])
         self.assertEqual(preds.shape, (len(data["X_val"]), 6))
+
+    def test_11_augment_batch_properties(self) -> None:
+        """augment_batch keeps shape and dtype, and is the identity when all settings are 0."""
+        x = np.random.randn(5, 128, 9).astype(np.float32)
+
+        unchanged = augment_batch(x, jitter_std=0.0, scale_std=0.0, max_shift=0).numpy()
+        np.testing.assert_array_equal(unchanged, x)
+
+        augmented = augment_batch(x, jitter_std=0.05, scale_std=0.1, max_shift=8).numpy()
+        self.assertEqual(augmented.shape, x.shape)
+        self.assertEqual(augmented.dtype, np.float32)
+        self.assertTrue(np.all(np.isfinite(augmented)))
+        self.assertFalse(np.allclose(augmented, x), "Augmentation should change the batch.")
+
+        # A pure time shift only reorders readings within each window
+        shifted = augment_batch(x, jitter_std=0.0, scale_std=0.0, max_shift=8).numpy()
+        np.testing.assert_allclose(np.sort(shifted, axis=1), np.sort(x, axis=1), rtol=1e-6)
+
+    def test_12_augmented_training_is_train_only(self) -> None:
+        """Augmented training never changes validation data and never reads X_test."""
+        data = generate_synthetic_har_data(
+            n_train_windows_per_class=6,
+            n_val_windows_per_class=3,
+            n_test_windows_per_class=3,
+            seed=42,
+        )
+        data["X_test"] = np.full_like(data["X_test"], np.nan)
+
+        config = small_pipeline_config(self.temp_dir)
+        config["model"]["pooling"] = "attention"
+        config["training"]["augment"] = True
+
+        run_dir = os.path.join(self.temp_dir, "run_aug")
+        model, metadata, _ = train_bilstm_pipeline(config=config, data=data, run_dir=run_dir, verbose=0)
+
+        with open(os.path.join(run_dir, "history.json"), "r", encoding="utf-8") as f:
+            history = json.load(f)
+        self.assertTrue(np.all(np.isfinite(history["loss"])))
+        self.assertTrue(metadata["augment"])
+        self.assertEqual(metadata["pooling"], "attention")
+
+        # If validation windows had been augmented, the recorded best val_loss would not
+        # match a clean evaluation of the restored best model on the raw validation data
+        clean_val_loss = model.evaluate(data["X_val"], data["y_val"], verbose=0)[0]
+        self.assertAlmostEqual(clean_val_loss, min(history["val_loss"]), places=4)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,8 @@
     "n_layers": 2,
     "dropout": 0.4,
     "dense_units": 64,
-    "num_classes": 6
+    "num_classes": 6,
+    "pooling": "last"
   },
   "training": {
     "learning_rate": 0.0005,
@@ -16,7 +17,11 @@
     "early_stopping_patience": 10,
     "reduce_lr_patience": 5,
     "reduce_lr_factor": 0.5,
-    "min_lr": 1e-6
+    "min_lr": 1e-6,
+    "augment": false,
+    "aug_jitter_std": 0.05,
+    "aug_scale_std": 0.1,
+    "aug_max_shift": 8
   },
   "data": {
     "npz_path": "data/uci_har_processed.npz",
