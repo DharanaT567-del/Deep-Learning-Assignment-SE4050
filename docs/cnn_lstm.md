@@ -132,7 +132,7 @@ This is comparable to the BiLSTM (~148K) but significantly lighter, making it a 
 | `configs/cnn_lstm.json` | Hyperparameter configuration |
 | `tests/test_cnn_lstm.py` | Unit and integration tests |
 | `notebooks/03_cnn_lstm.ipynb` | Training notebook with tuning experiments |
-| `notebooks/05_model_comparison.ipynb` | Cross-model evaluation benchmark (Member 4 responsibility) |
+| `notebooks/model_comparison.ipynb` | Cross-model evaluation benchmark |
 | `docs/cnn_lstm.md` | This document |
 
 ---
