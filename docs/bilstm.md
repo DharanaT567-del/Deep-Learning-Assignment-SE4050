@@ -160,9 +160,9 @@ outputs/bilstm/run_YYYYMMDD_HHMMSS/
 
 **The test split is never used in training.** `train_bilstm_pipeline` reads only `X_train/y_train` and `X_val/y_val`. Early stopping, checkpointing and learning-rate scheduling all monitor `val_loss`. `tests/test_bilstm.py::test_08` fills `X_test` with NaN before training and checks that the loss stays finite.
 
-### Results (`notebooks/04_bilstm.ipynb`, seed 42, CPU)
+### Results (`notebooks/04_bilstm.ipynb`, seed 42, Colab T4 GPU)
 
-The notebook compared variants on the validation split. The best was 64 units, 2 layers and **lr 1e-3** (best val loss 0.330, val acc 89.6%). It reaches **89.8% test accuracy and 0.897 macro F1** on the 9 held-out test subjects. The main error is SITTING predicted as STANDING (74.5% recall on SITTING). A waist-mounted sensor sees a nearly identical gravity vector in both postures.
+The notebook compared variants on the validation split. The best was the **baseline**: 64 units, 2 layers and lr 5e-4, exactly `configs/bilstm.json` (best val loss 0.333, val acc 88.1%). It reaches **88.9% test accuracy, 0.888 macro F1 and 0.983 macro ROC-AUC** on the 9 held-out test subjects. The main error is SITTING predicted as STANDING (109 of 491 windows, 75.6% recall on SITTING). A waist-mounted sensor sees a nearly identical gravity vector in both postures.
 
 ---
 
