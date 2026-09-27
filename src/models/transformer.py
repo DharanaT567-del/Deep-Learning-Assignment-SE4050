@@ -334,36 +334,39 @@ def build_transformer_classifier(
 
 def compile_transformer_model(
     model: keras.Model,
-    learning_rate: float = 0.0005,
-    weight_decay: float = 1e-4,
+    learning_rate: float = 0.001,
+    weight_decay: float = 0.0,
 ) -> keras.Model:
     """Compile the Transformer model with standard training settings and weight decay.
 
-    Optimizer: AdamW / Adam with decoupled weight decay for regularization
+    Optimizer: Adam / AdamW with decoupled weight decay (if weight_decay > 0)
     Loss: SparseCategoricalCrossentropy
     Metrics: Accuracy
 
     Parameters:
         model: Uncompiled Keras model.
-        learning_rate: Initial learning rate (default: 0.0005).
-        weight_decay: Decoupled weight decay rate (default: 1e-4).
+        learning_rate: Initial learning rate (default: 0.001).
+        weight_decay: Decoupled weight decay rate (default: 0.0).
 
     Returns:
         Compiled Keras model.
     """
-    try:
-        optimizer = keras.optimizers.AdamW(
-            learning_rate=float(learning_rate),
-            weight_decay=float(weight_decay),
-        )
-    except (AttributeError, TypeError):
+    if weight_decay > 0.0:
         try:
-            optimizer = keras.optimizers.Adam(
+            optimizer = keras.optimizers.AdamW(
                 learning_rate=float(learning_rate),
                 weight_decay=float(weight_decay),
             )
-        except TypeError:
-            optimizer = keras.optimizers.Adam(learning_rate=float(learning_rate))
+        except (AttributeError, TypeError):
+            try:
+                optimizer = keras.optimizers.Adam(
+                    learning_rate=float(learning_rate),
+                    weight_decay=float(weight_decay),
+                )
+            except TypeError:
+                optimizer = keras.optimizers.Adam(learning_rate=float(learning_rate))
+    else:
+        optimizer = keras.optimizers.Adam(learning_rate=float(learning_rate))
 
     loss = keras.losses.SparseCategoricalCrossentropy()
     metrics = ["accuracy"]

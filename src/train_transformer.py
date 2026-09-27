@@ -91,17 +91,17 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
             "num_layers": 2,
             "d_ff": 128,
             "ffn_activation": "gelu",
-            "dropout_rate": 0.3,
+            "dropout_rate": 0.2,
             "dense_units": 64,
             "num_classes": 6,
         },
         "training": {
-            "learning_rate": 0.0005,
-            "weight_decay": 1e-4,
+            "learning_rate": 0.001,
+            "weight_decay": 0.0,
             "batch_size": 64,
             "epochs": 60,
             "seed": 42,
-            "early_stopping_patience": 15,
+            "early_stopping_patience": 10,
             "reduce_lr_patience": 5,
             "reduce_lr_factor": 0.5,
             "min_lr": 1e-6,
@@ -190,8 +190,8 @@ def train_transformer_pipeline(
 
     # 3. Build & Compile Model
     model = build_transformer_classifier(config=model_cfg)
-    learning_rate = float(train_cfg.get("learning_rate", 0.0005))
-    weight_decay = float(train_cfg.get("weight_decay", 1e-4))
+    learning_rate = float(train_cfg.get("learning_rate", 0.001))
+    weight_decay = float(train_cfg.get("weight_decay", 0.0))
     model = compile_transformer_model(
         model, learning_rate=learning_rate, weight_decay=weight_decay
     )
