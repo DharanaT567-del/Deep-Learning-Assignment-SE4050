@@ -23,6 +23,10 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
+# Suppress verbose TensorFlow / oneDNN info and warnings
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
 # Compatible import of Keras / TensorFlow Keras
 try:
     import keras
@@ -87,16 +91,17 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
             "num_layers": 2,
             "d_ff": 128,
             "ffn_activation": "gelu",
-            "dropout_rate": 0.2,
+            "dropout_rate": 0.3,
             "dense_units": 64,
             "num_classes": 6,
         },
         "training": {
-            "learning_rate": 0.001,
+            "learning_rate": 0.0005,
+            "weight_decay": 1e-4,
             "batch_size": 64,
             "epochs": 60,
             "seed": 42,
-            "early_stopping_patience": 10,
+            "early_stopping_patience": 15,
             "reduce_lr_patience": 5,
             "reduce_lr_factor": 0.5,
             "min_lr": 1e-6,
@@ -185,8 +190,11 @@ def train_transformer_pipeline(
 
     # 3. Build & Compile Model
     model = build_transformer_classifier(config=model_cfg)
-    learning_rate = float(train_cfg.get("learning_rate", 0.001))
-    model = compile_transformer_model(model, learning_rate=learning_rate)
+    learning_rate = float(train_cfg.get("learning_rate", 0.0005))
+    weight_decay = float(train_cfg.get("weight_decay", 1e-4))
+    model = compile_transformer_model(
+        model, learning_rate=learning_rate, weight_decay=weight_decay
+    )
 
     total_params = int(model.count_params())
     trainable_params = int(sum(np.prod(w.shape) for w in model.trainable_weights))
@@ -446,6 +454,12 @@ def main() -> None:
         help="Override learning rate",
     )
     parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=None,
+        help="Override optimizer weight decay",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -475,6 +489,8 @@ def main() -> None:
         config["training"]["batch_size"] = args.batch_size
     if args.lr is not None:
         config["training"]["learning_rate"] = args.lr
+    if args.weight_decay is not None:
+        config["training"]["weight_decay"] = args.weight_decay
     if args.seed is not None:
         config["training"]["seed"] = args.seed
     if args.output_dir:
