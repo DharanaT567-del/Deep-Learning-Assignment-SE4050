@@ -1,18 +1,3 @@
-"""HAR Shared Data Contract and Validation Interface.
-
-This module formalizes the data interface agreement between all four project members.
-It validates data integrity, dimensional contracts, and enforces strict subject-wise
-data leakage prevention.
-
-Data Contract:
-    - X_train, X_val, (X_test): float arrays shaped (N, 128, 9), finite (no NaNs or Infs).
-    - y_train, y_val, (y_test): integer arrays shaped (N,), values in {0, 1, 2, 3, 4, 5}.
-    - subject_train, subject_val, (subject_test): integer/string subject IDs per window.
-    - Leakage constraint: set(subject_train) ∩ set(subject_val) == ∅.
-    - Stratification check: Both train and val splits contain all 6 activity classes.
-    - Normalization rule: Fitted strictly on training set only. Never fit on val/test.
-"""
-
 from __future__ import annotations
 
 import os
@@ -45,7 +30,6 @@ SENSOR_CHANNEL_NAMES = [
 
 
 class DataContractValidationError(ValueError):
-    """Raised when data violates the four-member shared HAR data contract."""
     pass
 
 
@@ -59,18 +43,6 @@ def validate_har_split(
     num_classes: int = 6,
     require_all_classes: bool = True,
 ) -> None:
-    """Validate a single split for correct shapes, finite values, and label bounds.
-
-    Parameters:
-        x: Feature array of sensor windows.
-        y: Activity class labels.
-        subject: Subject identifier array.
-        split_name: Name of split (e.g. 'train', 'val', 'test').
-        expected_seq_len: Required time window length (default: 128).
-        expected_channels: Required sensor channel count (default: 9).
-        num_classes: Number of distinct classes (default: 6).
-        require_all_classes: Whether all classes {0..num_classes-1} must be present.
-    """
     if not isinstance(x, np.ndarray):
         raise DataContractValidationError(
             f"[{split_name}] 'X' must be a numpy.ndarray, got {type(x)}."
@@ -135,19 +107,6 @@ def validate_har_split(
 
 
 def validate_har_dataset(data: Dict[str, np.ndarray], check_test: bool = False) -> None:
-    """Validate full dataset dictionary against the shared contract.
-
-    Enforces:
-        1. Presence of required keys: X_train, y_train, subject_train, X_val, y_val, subject_val.
-        2. Finite numeric values and valid shapes (N, 128, 9).
-        3. Zero subject overlap between training and validation (Data Leakage Prevention).
-        4. Presence of all 6 classes in train and val.
-        5. (Optional) Validity of X_test, y_test, subject_test if present.
-
-    Parameters:
-        data: Dictionary mapping key names to numpy arrays.
-        check_test: If True, also strictly validates test split if present.
-    """
     required_keys = ["X_train", "y_train", "subject_train", "X_val", "y_val", "subject_val"]
     for k in required_keys:
         if k not in data:
@@ -191,19 +150,6 @@ def apply_training_standardization(
     X_val: np.ndarray,
     X_test: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray], Dict[str, np.ndarray]]:
-    """Standardize sensor channels using statistics fitted STRICTLY on training data only.
-
-    Calculates mean and standard deviation across (N_train, 128) per sensor channel (axis=9),
-    then applies the identical transformation to validation and test arrays without recomputing.
-
-    Parameters:
-        X_train: Training windows shaped (N_train, 128, 9).
-        X_val: Validation windows shaped (N_val, 128, 9).
-        X_test: Optional test windows shaped (N_test, 128, 9).
-
-    Returns:
-        (X_train_norm, X_val_norm, X_test_norm, stats_dict)
-    """
     # Channel-wise mean and std computed strictly on train split
     # Shape of mean and std: (1, 1, 9)
     train_mean = np.mean(X_train, axis=(0, 1), keepdims=True)
@@ -226,15 +172,6 @@ def load_har_npz(
     npz_path: str,
     normalize: bool = False,
 ) -> Dict[str, np.ndarray]:
-    """Load and validate HAR dataset from a standard NPZ file.
-
-    Parameters:
-        npz_path: Path to the .npz archive.
-        normalize: If True and data is unnormalized, fit standard scaler strictly on X_train.
-
-    Returns:
-        Dictionary containing verified arrays.
-    """
     if not os.path.exists(npz_path):
         raise FileNotFoundError(f"HAR NPZ data file not found at '{npz_path}'.")
 
@@ -268,13 +205,6 @@ def generate_synthetic_har_data(
     num_classes: int = 6,
     seed: int = 42,
 ) -> Dict[str, np.ndarray]:
-    """Generate realistic synthetic HAR dataset for pipeline verification and smoke testing.
-
-    Ensures zero subject overlap:
-        Train subjects: [1, 2, 3, 4, 5, 6]
-        Val subjects: [7, 8]
-        Test subjects: [9, 10]
-    """
     rng = np.random.RandomState(seed)
 
     def _generate_split(windows_per_class: int, subject_pool: list[int]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
