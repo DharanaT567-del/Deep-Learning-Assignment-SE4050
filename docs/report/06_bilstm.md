@@ -43,7 +43,7 @@ The sigmoid and tanh choices are the standard Keras LSTM defaults (`recurrent_ac
 | Batch size | 64 (93 steps per epoch) |
 | Maximum epochs | 60 |
 | Seed | 42 (Python, NumPy, TensorFlow and weight initialisation) |
-| Hardware | CPU only (TensorFlow 2.21, Keras 3.15), about 7–8 s per epoch for the 2-layer model |
+| Hardware | Google Colab T4 GPU (TensorFlow 2.20, Keras 3.13), about 2.7 s per epoch for the 2-layer model |
 
 The default learning rate is lower than the Transformer's 10⁻³ because recurrent networks are more sensitive to step size. Gradient-norm clipping at 1.0 guards against the exploding gradients that backpropagation through 128 time steps can produce. No run in our experiments showed a loss spike or a NaN, including the lr 10⁻³ variant.
 
@@ -60,24 +60,25 @@ The default learning rate is lower than the Transformer's 10⁻³ because recurr
 
 Starting from the baseline above, we trained three variants. Each changes exactly **one** hyperparameter, so any difference can be attributed to that change. All four runs share the same data, seed, epoch budget and callbacks. They are ranked by best validation loss, and the validation accuracy at that epoch is reported alongside. The test split was not used for tuning.
 
-| Variant | Units / dir | BiLSTM layers | Learning rate | Params | Best val loss | Val acc at best epoch | Best epoch | Epochs run | s / epoch (CPU) |
+| Variant | Units / dir | BiLSTM layers | Learning rate | Params | Best val loss | Val acc at best epoch | Best epoch | Epochs run | s / epoch (T4 GPU) |
 | :--- | :---: | :---: | :---: | ---: | ---: | ---: | :---: | :---: | ---: |
-| **lr_1e-3** | 64 | 2 | 1 × 10⁻³ | 145,350 | **0.3303** | **89.57%** | 4 | 14 | 8.1 |
-| baseline | 64 | 2 | 5 × 10⁻⁴ | 145,350 | 0.3505 | 88.29% | 2 | 12 | 7.1 |
-| layers_1 | 64 | 1 | 5 × 10⁻⁴ | 46,534 | 0.3737 | 87.57% | 5 | 15 | 2.9 |
-| units_32 | 32 | 2 | 5 × 10⁻⁴ | 40,134 | 0.4234 | 87.50% | 2 | 12 | 3.9 |
+| **baseline** | 64 | 2 | 5 × 10⁻⁴ | 145,350 | **0.3332** | 88.14% | 2 | 12 | 2.7 |
+| layers_1 | 64 | 1 | 5 × 10⁻⁴ | 46,534 | 0.3350 | 88.86% | 5 | 15 | 1.6 |
+| lr_1e-3 | 64 | 2 | 1 × 10⁻³ | 145,350 | 0.3442 | **89.50%** | 3 | 13 | 2.9 |
+| units_32 | 32 | 2 | 5 × 10⁻⁴ | 40,134 | 0.4234 | 87.50% | 2 | 12 | 2.6 |
 
-Two findings stand out:
+Three findings stand out:
 
-- **Capacity helps.** Halving the units, or dropping the second layer, removes about 70% of the parameters and roughly halves the time per epoch. It also costs about 0.7–0.8 points of validation accuracy and raises the best validation loss. The stacked 64-unit model is worth its cost.
-- **A higher learning rate helps a little.** With clipping and ReduceLROnPlateau in place, lr 10⁻³ trained stably and reached the lowest validation loss. We selected it (`lr_1e-3`) for the final evaluation. However, all four variants lie within about 2 points of validation accuracy. With a single seed and only 4 validation subjects, that spread is close to the noise level, so the choice is a modest preference, not a clear win. `configs/bilstm.json` keeps lr 5 × 10⁻⁴ as the documented baseline. The selected run is reproduced with `python src/train_bilstm.py --lr 0.001`.
+- **Width matters more than depth.** Halving the units per direction (`units_32`) gave clearly the worst result: the highest validation loss (0.423) and the lowest validation accuracy (87.5%). Dropping the second layer (`layers_1`) removed 68% of the parameters and 41% of the time per epoch, yet it reached almost the same validation loss as the baseline (0.335 vs 0.333) and a slightly higher validation accuracy. On a GPU, halving the units barely saves time (2.6 vs 2.7 s per epoch), because the 128 sequential time steps, not the layer width, dominate the cost.
+- **A higher learning rate trains stably but does not win on loss.** With clipping and ReduceLROnPlateau in place, lr 10⁻³ gave the highest validation accuracy (89.5%) but a higher best validation loss (0.344) than the baseline.
+- **The ranking is within noise.** We selected the `baseline` for the final evaluation, because it had the lowest validation loss, the rule fixed before tuning. The top three variants are only 0.011 apart in validation loss, and all four lie within 2 points of validation accuracy. An earlier CPU run with the same seed ranked `lr_1e-3` first, because GPU (cuDNN) kernels are not fully deterministic and the TensorFlow versions differed. With a single seed and only 4 validation subjects, the choice is therefore a modest preference, not a clear win. Because the selected model is the default configuration, `python src/train_bilstm.py` with `configs/bilstm.json` reproduces it.
 
-On the 9 held-out test subjects, the selected model reaches 89.8% accuracy, 0.897 macro F1 and 0.985 macro one-vs-rest ROC-AUC. ROC-AUC measures how well each class is ranked across all windows, not only the top prediction, so it stays high even though 300 windows are misclassified. In 79% of those errors the true class is the model's second choice, but usually with low probability (median 0.07), so the model is confidently wrong rather than narrowly wrong. The weakest per-class AUCs are SITTING (0.968) and STANDING (0.976). The selected model's validation accuracy was 89.6%, so the subject-wise validation split was a faithful proxy for the test set. The full comparison with the other architectures is in the shared evaluation section.
+On the 9 held-out test subjects, the selected model reaches 88.9% accuracy, 0.888 macro F1 and 0.983 macro one-vs-rest ROC-AUC. ROC-AUC measures how well each class is ranked across all windows, not only the top prediction, so it stays high even though 327 of 2,947 windows are misclassified. The largest error is SITTING predicted as STANDING (109 of 491 sitting windows, 75.6% recall), plus 62 STANDING windows predicted as SITTING. Among the dynamic classes the model over-predicts WALKING_DOWNSTAIRS: it has the highest recall of the dynamic classes (98.6%) but the lowest precision of all classes (81.7%), mainly because of WALKING (59) and WALKING_UPSTAIRS (30) windows predicted as downstairs. LAYING is almost perfect (100% precision, 97.6% recall). The selected model's validation accuracy was 88.1%, so the subject-wise validation split was a faithful proxy for the test set. The full comparison with the other architectures is in the shared evaluation section.
 
 ### 6.5 Convergence and the role of early stopping
 
-The BiLSTM converges almost immediately. In the baseline run, training accuracy goes from 65.0% after epoch 1 to 94.1% after epoch 2 and 95.8% after epoch 3. Validation loss reaches its minimum (0.350) at **epoch 2**. The best epoch is 2–5 for every variant (epoch 4 for the selected lr 10⁻³ run).
+The BiLSTM converges almost immediately. In the baseline run (the selected model), training accuracy goes from 65.0% after epoch 1 to 93.8% after epoch 2 and 95.8% after epoch 3. Validation loss reaches its minimum (0.333) at **epoch 2**. The best epoch is 2–5 for every variant.
 
-Everything after that point is overfitting to the training subjects. In the baseline run, training loss keeps falling from 0.193 to 0.082 while validation loss climbs from 0.350 to 0.534. Training accuracy settles around 96–97%, and validation accuracy plateaus around 87–89%. The gap of about 7 points is a subject gap: the model fits the 17 training people better than it generalises to new ones. ReduceLROnPlateau halves the learning rate after epoch 7 (5 × 10⁻⁴ → 2.5 × 10⁻⁴), but that does not recover validation loss. It fires again at epoch 12, which is also the epoch where early stopping ends the run, so the second reduction never takes effect.
+Everything after that point is overfitting to the training subjects. In the baseline run, training loss keeps falling from 0.199 to 0.079 while validation loss climbs from 0.333 to 0.435. Training accuracy settles around 96–97%, and validation accuracy plateaus around 88–90%. The gap of about 7–8 points is a subject gap: the model fits the 17 training people better than it generalises to new ones. ReduceLROnPlateau halves the learning rate after epoch 7 (5 × 10⁻⁴ → 2.5 × 10⁻⁴), but that does not recover validation loss. It fires again at epoch 12, which is also the epoch where early stopping ends the run, so the second reduction never takes effect.
 
-As a result, most of the real regularisation comes from **early stopping**, not from the 60-epoch budget. Every run stops after 12–15 epochs, which is about 1.5–2 minutes on CPU for the 2-layer model. `restore_best_weights=True` then returns the weights from the validation-loss minimum. Without it, the final model would be the epoch-12 model, whose validation loss is 52% higher than the best (0.534 vs 0.350). The 60-epoch limit is never reached. It acts only as an upper bound.
+As a result, most of the real regularisation comes from **early stopping**, not from the 60-epoch budget. Every run stops after 12–15 epochs, which is about 24–37 s on a T4 GPU. `restore_best_weights=True` then returns the weights from the validation-loss minimum. Without it, the final model would be the epoch-12 model, whose validation loss is 30% higher than the best (0.435 vs 0.333). The 60-epoch limit is never reached. It acts only as an upper bound.

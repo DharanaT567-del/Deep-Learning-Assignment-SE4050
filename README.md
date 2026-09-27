@@ -6,10 +6,10 @@ A collaborative deep learning project comparing four distinct neural architectur
 
 | Member | Architecture / Component | Implementation Scope |
 | :--- | :--- | :--- |
-| **Dharana** | **Transformer Encoder** (Branch: `dharana/componenet1/new`) | Multi-head self-attention with trainable positional embeddings in TensorFlow/Keras. |
-| **Member 2** | **1D-CNN & EDA** | 1D Convolutional baseline and exploratory signal analysis. |
-| **Member 3** | **BiLSTM & Shared Data Loader** | Bidirectional LSTM model and centralized dataset preprocessor. |
-| **Member 4** | **CNN-LSTM & Shared Evaluation** | Hybrid CNN-LSTM and comparative evaluation pipeline. |
+| **Dharana (Member 1)** | **Transformer Encoder** (Branch: `dharana/componenet1/new`) | Multi-head self-attention with trainable positional embeddings in TensorFlow/Keras. |
+| **Disandu (Member 2)** | **1D-CNN & EDA** | 1D Convolutional baseline and exploratory signal analysis. |
+| **Vishwa (Member 3)** | **BiLSTM & Shared Data Loader** | Bidirectional LSTM model and centralized dataset preprocessor. |
+| **Monal (Member 4)** | **CNN-LSTM & Shared Evaluation** | Hybrid CNN-LSTM and comparative evaluation pipeline. |
 
 ---
 
@@ -101,5 +101,10 @@ jupyter notebook notebooks/02_transformer.ipynb
 ---
 
 ## Documentation
+ 
+For full mathematical descriptions, tensor flow diagrams, and evaluation reports:
+- [Transformer Documentation](docs/transformer.md) (Dharana - Member 1)
+- [BiLSTM Documentation](docs/bilstm.md) (Vishwa - Member 3)
+- [CNN-LSTM Documentation](docs/cnn_lstm.md) (Monal - Member 4)
+- [Shared Multi-Model Evaluation Benchmark](docs/model_comparison.md) (Monal - Member 4)
 
-For full mathematical descriptions, tensor flow diagrams, and integration specifications for Member 3 and Member 4, refer to [`docs/transformer.md`](docs/transformer.md).

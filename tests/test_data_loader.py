@@ -1,19 +1,3 @@
-"""Unit tests for Member 3's shared UCI HAR loader.
-
-Verifies:
-1. Inertial signal files are stacked in SIGNAL_NAMES channel order.
-2. Labels are converted from 1..6 to 0..5.
-3. The train/val split is disjoint by subject (no leakage).
-4. Every class 0..5 appears in both train and val.
-5. Standardization statistics come from the train split only.
-6. The built dataset passes the shared data contract.
-7. NPZ save/load round-trips exactly.
-8. A missing dataset folder raises a clear, actionable error.
-
-All tests run on a small synthetic copy of the UCI HAR folder layout, so the real
-dataset is not required. One extra test runs on the real dataset when it is present.
-"""
-
 from __future__ import annotations
 
 import shutil
@@ -46,11 +30,6 @@ def write_fake_uci_har(
     windows_per_subject_class: int = 2,
     seed: int = 0,
 ) -> Path:
-    """Write a tiny dataset with the real UCI HAR folder layout and return its path.
-
-    Channel k is filled with values centred on (k + 1) * 10, so stacking order is checkable.
-    Test windows get an extra +5 offset so standardization leakage is detectable.
-    """
     rng = np.random.default_rng(seed)
     dataset_dir = root / "UCI HAR Dataset"
 
@@ -76,8 +55,6 @@ def write_fake_uci_har(
 
 
 class TestUciHarLoader(unittest.TestCase):
-    """Test suite for loading, splitting, standardizing and saving UCI HAR."""
-
     @classmethod
     def setUpClass(cls) -> None:
         cls.temp_dir = Path(tempfile.mkdtemp())
@@ -90,7 +67,6 @@ class TestUciHarLoader(unittest.TestCase):
         shutil.rmtree(cls.temp_dir, ignore_errors=True)
 
     def test_01_signal_stacking_order(self) -> None:
-        """Channels are stacked on the last axis in SIGNAL_NAMES order."""
         X = load_inertial_signals(self.dataset_dir, "train")
 
         self.assertEqual(X.shape, (len(self.train_subjects) * 6 * 2, 128, 9))
@@ -99,7 +75,6 @@ class TestUciHarLoader(unittest.TestCase):
         np.testing.assert_allclose(channel_means, [(k + 1) * 10.0 for k in range(9)], atol=0.5)
 
     def test_02_labels_are_zero_indexed(self) -> None:
-        """Labels come back in 0..5, never 1..6."""
         y = load_labels(self.dataset_dir, "train")
 
         self.assertTrue(np.issubdtype(y.dtype, np.integer))
@@ -107,7 +82,6 @@ class TestUciHarLoader(unittest.TestCase):
         self.assertNotIn(6, y)
 
     def test_03_subject_split_is_disjoint(self) -> None:
-        """No subject ID appears in both train and val."""
         subjects = load_subjects(self.dataset_dir, "train")
         labels = load_labels(self.dataset_dir, "train")
         train_mask, val_mask = split_train_val_by_subject(subjects, labels, n_val_subjects=3, seed=42)
@@ -124,7 +98,6 @@ class TestUciHarLoader(unittest.TestCase):
         np.testing.assert_array_equal(train_mask, train_mask_2)
 
     def test_04_all_classes_present_in_both_splits(self) -> None:
-        """Every class 0..5 appears in train and val, re-drawing when a draw misses one."""
         subjects = load_subjects(self.dataset_dir, "train")
         labels = load_labels(self.dataset_dir, "train")
         train_mask, val_mask = split_train_val_by_subject(subjects, labels, n_val_subjects=3, seed=7)
@@ -139,7 +112,6 @@ class TestUciHarLoader(unittest.TestCase):
             split_train_val_by_subject(lonely_subjects, lonely_labels, n_val_subjects=1, seed=0)
 
     def test_05_standardization_uses_train_statistics_only(self) -> None:
-        """Val/test are scaled with the train mean/std, not their own."""
         data = build_processed_dataset(self.dataset_dir, n_val_subjects=3, seed=42)
 
         # Train is centred on zero by construction
@@ -156,7 +128,6 @@ class TestUciHarLoader(unittest.TestCase):
         np.testing.assert_allclose(data["X_val"], (raw["X_val"] - mean) / std, rtol=1e-4, atol=1e-4)
 
     def test_06_output_passes_data_contract(self) -> None:
-        """The built dict passes validate_har_dataset, including the test split."""
         data = build_processed_dataset(self.dataset_dir, n_val_subjects=3, seed=42)
 
         validate_har_dataset(data, check_test=True)
@@ -164,7 +135,6 @@ class TestUciHarLoader(unittest.TestCase):
         self.assertEqual(data["X_test"].shape[0], len(self.test_subjects) * 6 * 2)
 
     def test_07_npz_roundtrip(self) -> None:
-        """Saving then loading returns identical keys and arrays."""
         data = build_processed_dataset(self.dataset_dir, n_val_subjects=3, seed=42)
         out_path = save_processed_dataset(data, self.temp_dir / "nested" / "processed.npz")
 
@@ -176,7 +146,6 @@ class TestUciHarLoader(unittest.TestCase):
                 self.assertEqual(loaded[key].dtype, data[key].dtype)
 
     def test_08_missing_dataset_raises_clear_error(self) -> None:
-        """A missing folder raises DatasetNotFoundError naming the URL and location."""
         missing_dir = self.temp_dir / "does_not_exist"
         with self.assertRaises(DatasetNotFoundError) as ctx:
             build_processed_dataset(missing_dir)
@@ -191,10 +160,7 @@ class TestUciHarLoader(unittest.TestCase):
 
 @unittest.skipUnless(DEFAULT_DATASET_DIR.is_dir(), "Real UCI HAR dataset not downloaded")
 class TestRealUciHarDataset(unittest.TestCase):
-    """Checks against the real dataset, skipped when it is not present."""
-
     def test_09_real_dataset_shapes_and_subjects(self) -> None:
-        """Real data has the documented sizes and 21 train/val + 9 test disjoint subjects."""
         data = build_processed_dataset(DEFAULT_DATASET_DIR, n_val_subjects=4, seed=42)
 
         self.assertEqual(data["X_train"].shape[0] + data["X_val"].shape[0], 7352)
