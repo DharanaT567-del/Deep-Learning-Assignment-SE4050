@@ -1,18 +1,3 @@
-"""Training pipeline for Member 3's BiLSTM Component on HAR dataset.
-
-This script manages:
-1. Seed setting for reproducibility (Python, NumPy, TensorFlow).
-2. Data contract validation and leakage prevention.
-3. BiLSTM model construction and compilation.
-4. Keras callbacks: EarlyStopping, ModelCheckpoint (.keras), ReduceLROnPlateau, CSVLogger.
-5. Structured run outputs: best_model.keras, history.json, history.csv, config.json, run_metadata.json.
-6. Support for both real NPZ data and synthetic smoke validation.
-7. Optional train-only data augmentation (jitter, per-channel scaling, time shift).
-
-The test split is never used here: training and model selection use train/val only.
-Augmentation is applied to training batches only; validation windows are never changed.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -27,7 +12,6 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-# Compatible import of Keras / TensorFlow Keras
 try:
     import keras
     import tensorflow as tf
@@ -35,7 +19,6 @@ except ImportError:
     import tensorflow as tf
     from tensorflow import keras
 
-# Adjust Python path for direct script execution
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 if PROJECT_ROOT not in sys.path:
@@ -50,7 +33,6 @@ from src.models.bilstm import build_bilstm_model, load_bilstm_model
 
 
 def set_seed(seed: int = 42) -> None:
-    """Set seeds across Python random, NumPy, and TensorFlow for reproducibility."""
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
@@ -63,15 +45,6 @@ def augment_batch(
     scale_std: float = 0.1,
     max_shift: int = 8,
 ) -> tf.Tensor:
-    """Randomly perturb a batch of sensor windows, keeping its shape (N, T, C).
-
-    - Jitter: add Gaussian noise with std `jitter_std` to every reading.
-    - Scaling: multiply each channel of each window by a factor drawn from N(1, scale_std).
-    - Time shift: circularly shift each window by a random number of steps in [-max_shift, max_shift].
-
-    Inputs are already standardized, so the stds are in units of one channel std.
-    Setting all three to 0 returns the input unchanged.
-    """
     x = tf.convert_to_tensor(x, dtype=tf.float32)
     shape = tf.shape(x)
     n, t, c = shape[0], shape[1], shape[2]
@@ -88,7 +61,6 @@ def augment_batch(
 
 
 def get_system_metadata() -> Dict[str, Any]:
-    """Capture environment, framework versions, and hardware device information."""
     devices = tf.config.list_physical_devices()
     gpus = tf.config.list_physical_devices("GPU")
     return {
@@ -104,7 +76,6 @@ def get_system_metadata() -> Dict[str, Any]:
 
 
 def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
-    """Load JSON config or fall back to default configuration values."""
     default_config: Dict[str, Any] = {
         "model": {
             "seq_len": 128,
@@ -157,17 +128,6 @@ def train_bilstm_pipeline(
     run_dir: Optional[str] = None,
     verbose: int = 1,
 ) -> Tuple[keras.Model, Dict[str, Any], str]:
-    """Execute complete training pipeline for the BiLSTM model.
-
-    Parameters:
-        config: Full configuration dictionary.
-        data: Optional preloaded data dictionary matching the HAR contract.
-        run_dir: Explicit output directory (defaults to timestamped folder under base_dir).
-        verbose: Verbosity mode (0=silent, 1=progress bar, 2=one line per epoch).
-
-    Returns:
-        (best_model, run_metadata, run_dir_path)
-    """
     model_cfg = config.get("model", {})
     train_cfg = config.get("training", {})
     data_cfg = config.get("data", {})
@@ -176,14 +136,12 @@ def train_bilstm_pipeline(
     seed = int(train_cfg.get("seed", 42))
     set_seed(seed)
 
-    # 1. Setup Output Directory
     if run_dir is None:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         base_out = output_cfg.get("base_dir", "outputs/bilstm")
         run_dir = os.path.join(base_out, f"run_{timestamp}")
     os.makedirs(run_dir, exist_ok=True)
 
-    # 2. Data Loading & Validation
     data_source = "provided"
     if data is None:
         npz_path = data_cfg.get("npz_path", "data/uci_har_processed.npz")
@@ -196,7 +154,6 @@ def train_bilstm_pipeline(
             data = generate_synthetic_har_data(seed=seed)
             data_source = "synthetic"
 
-    # Ensure dataset strictly meets the shared data contract
     validate_har_dataset(data)
 
     # Only train/val are read below; X_test is reserved for the final evaluation
@@ -211,12 +168,11 @@ def train_bilstm_pipeline(
     train_subjects_list = sorted([int(s) for s in np.unique(subject_train)])
     val_subjects_list = sorted([int(s) for s in np.unique(subject_val)])
 
-    print(f"[Data Contract] Validated successfully.")
+    print("[Data Contract] Validated successfully.")
     print(f"  Train windows: {len(X_train)} (Subjects: {train_subjects_list})")
     print(f"  Val windows:   {len(X_val)} (Subjects: {val_subjects_list})")
     print(f"  Input window shape: {X_train.shape[1:]}")
 
-    # 3. Build & Compile Model
     learning_rate = float(train_cfg.get("learning_rate", 0.0005))
     model = build_bilstm_model(
         input_shape=(int(model_cfg.get("seq_len", 128)), int(model_cfg.get("num_features", 9))),
@@ -238,7 +194,6 @@ def train_bilstm_pipeline(
     print(f"  Total parameters:     {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
 
-    # 4. Configure Callbacks
     best_model_path = os.path.join(run_dir, "best_model.keras")
     history_csv_path = os.path.join(run_dir, "history.csv")
 
@@ -268,7 +223,6 @@ def train_bilstm_pipeline(
         keras.callbacks.CSVLogger(history_csv_path),
     ]
 
-    # 5. Execute Training
     batch_size = int(train_cfg.get("batch_size", 64))
     epochs = int(train_cfg.get("epochs", 60))
     augment = bool(train_cfg.get("augment", False))
@@ -316,26 +270,21 @@ def train_bilstm_pipeline(
     end_iso = datetime.datetime.now().isoformat()
     duration_seconds = round(end_time - start_time, 2)
 
-    # 6. Save Training Artifacts
-    # Save History JSON
     history_dict = {k: [float(v) for v in vals] for k, vals in history_obj.history.items()}
     history_json_path = os.path.join(run_dir, "history.json")
     with open(history_json_path, "w", encoding="utf-8") as f:
         json.dump(history_dict, f, indent=2)
 
-    # Save Resolved Config JSON
     config_json_path = os.path.join(run_dir, "config.json")
     with open(config_json_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
-    # Verify best model was saved; if early stopping happened before checkpoint, save current best
+    # ModelCheckpoint may not have written a file (e.g. val_loss never finite)
     if not os.path.exists(best_model_path):
         model.save(best_model_path)
 
-    # Test loading saved model
     loaded_best_model = load_bilstm_model(best_model_path)
 
-    # Compile run metadata
     val_loss_hist = history_dict.get("val_loss", [])
     val_acc_hist = history_dict.get("val_accuracy", [])
     best_val_loss = float(min(val_loss_hist)) if val_loss_hist else None
@@ -387,7 +336,6 @@ def train_bilstm_pipeline(
 
 
 def main() -> None:
-    """CLI entrypoint for training the BiLSTM component."""
     parser = argparse.ArgumentParser(
         description="Train Bidirectional LSTM for Human Activity Recognition (HAR)"
     )
@@ -443,7 +391,6 @@ def main() -> None:
 
     config = load_config(args.config)
 
-    # CLI Overrides
     if args.data_path:
         config["data"]["npz_path"] = args.data_path
     if args.epochs is not None:
