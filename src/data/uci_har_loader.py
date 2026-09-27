@@ -51,10 +51,16 @@ from src.data_contract import (
 
 PathLike = Union[str, Path]
 
+import ssl
+
 UCI_HAR_URL = (
     "https://archive.ics.uci.edu/static/public/240/"
     "human+activity+recognition+using+smartphones.zip"
 )
+FALLBACK_UCI_HAR_URLS = [
+    "https://archive.ics.uci.edu/static/public/240/human+activity+recognition+using+smartphones.zip",
+    "https://archive.ics.uci.edu/ml/machine-learning-databases/00240/UCI%20HAR%20Dataset.zip",
+]
 DATASET_FOLDER_NAME = "UCI HAR Dataset"
 DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
 DEFAULT_DATASET_DIR = DEFAULT_DATA_DIR / DATASET_FOLDER_NAME
@@ -110,6 +116,30 @@ def _require_file(path: Path, dataset_dir: Path) -> Path:
     return path
 
 
+def _fetch_url(url: str, tmp_path: Path, timeout: int = 60) -> bool:
+    """Helper to download a file with SSL fallback handling."""
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+    )
+    # Attempt 1: Standard SSL context
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp, open(tmp_path, "wb") as out_file:
+            shutil.copyfileobj(resp, out_file)
+        return True
+    except Exception:
+        pass
+
+    # Attempt 2: Unverified SSL context (for systems with outdated CA roots)
+    try:
+        unverified_ctx = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, context=unverified_ctx, timeout=timeout) as resp, open(tmp_path, "wb") as out_file:
+            shutil.copyfileobj(resp, out_file)
+        return True
+    except Exception:
+        return False
+
+
 def download_uci_har(dest_dir: PathLike = DEFAULT_DATA_DIR, force: bool = False) -> Path:
     """Download and double-unzip UCI HAR into dest_dir; return the dataset folder path."""
     dest_dir = Path(dest_dir)
@@ -124,34 +154,36 @@ def download_uci_har(dest_dir: PathLike = DEFAULT_DATA_DIR, force: bool = False)
     # A partial download leaves a corrupt archive behind; fetch it again in that case
     if force or not zipfile.is_zipfile(archive_path):
         tmp_path = archive_path.with_suffix(".zip.part")
-        print(f"[Download] Fetching {UCI_HAR_URL} ...")
-        try:
-            req = urllib.request.Request(UCI_HAR_URL, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req) as resp, open(tmp_path, "wb") as out_file:
-                shutil.copyfileobj(resp, out_file)
-        except Exception as exc:
+        download_success = False
+
+        for candidate_url in FALLBACK_UCI_HAR_URLS:
+            print(f"[Download] Fetching {candidate_url} ...")
+            if _fetch_url(candidate_url, tmp_path):
+                if zipfile.is_zipfile(tmp_path):
+                    download_success = True
+                    break
+                else:
+                    tmp_path.unlink(missing_ok=True)
+
+        if not download_success:
             tmp_path.unlink(missing_ok=True)
             raise RuntimeError(
-                f"Failed to download UCI HAR from {UCI_HAR_URL} ({exc}).\n"
-                f"Download it manually, unzip it twice, and place the folder at '{dataset_dir}'."
-            ) from exc
-        if not zipfile.is_zipfile(tmp_path):
-            tmp_path.unlink(missing_ok=True)
-            raise RuntimeError(
-                f"Downloaded file from {UCI_HAR_URL} is not a valid zip archive.\n"
-                f"Download it manually and place the unzipped folder at '{dataset_dir}'."
+                f"Failed to download UCI HAR archive from available endpoints.\n"
+                f"Please download it manually from {UCI_HAR_URL}, unzip it twice, and place the folder at '{dataset_dir}'."
             )
         tmp_path.replace(archive_path)
 
-    # Outer archive contains 'UCI HAR Dataset.zip', which contains the actual folder
+    # Outer archive extraction
     print(f"[Download] Extracting '{archive_path}' ...")
     with zipfile.ZipFile(archive_path) as outer:
         outer.extractall(dest_dir)
+
+    # Inner nested archive extraction if present
     inner_zip = dest_dir / f"{DATASET_FOLDER_NAME}.zip"
     if inner_zip.is_file():
         with zipfile.ZipFile(inner_zip) as inner:
             inner.extractall(dest_dir)
-        inner_zip.unlink()
+        inner_zip.unlink(missing_ok=True)
     shutil.rmtree(dest_dir / "__MACOSX", ignore_errors=True)
 
     if not dataset_dir.is_dir():
