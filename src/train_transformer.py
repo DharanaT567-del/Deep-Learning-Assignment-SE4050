@@ -6,7 +6,8 @@ This script manages:
 3. Transformer model construction and compilation.
 4. Keras callbacks: EarlyStopping, ModelCheckpoint (.keras), ReduceLROnPlateau, CSVLogger.
 5. Structured run outputs: best_model.keras, history.json, history.csv, config.json, run_metadata.json.
-6. Support for both real NPZ data and synthetic smoke validation.
+6. Diagnostic visualizations: learning_curves.png, confusion_matrix.png.
+7. Support for both real NPZ data and synthetic smoke validation.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import platform
 import random
 import sys
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
@@ -36,12 +38,13 @@ except ImportError:
     from tensorflow import keras
 
 # Adjust Python path for direct script execution
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data_contract import (
+    ACTIVITY_LABEL_MAPPING,
     DataContractValidationError,
     generate_synthetic_har_data,
     load_har_npz,
@@ -127,10 +130,149 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     return default_config
 
 
+def save_learning_curves_plot(
+    history: Dict[str, list],
+    best_epoch: Optional[int] = None,
+    save_path: Optional[Path] = None,
+) -> None:
+    """Generate and save training vs validation loss and accuracy curves."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        loss = history.get("loss", [])
+        val_loss = history.get("val_loss", [])
+        acc = history.get("accuracy", [])
+        val_acc = history.get("val_accuracy", [])
+
+        if not loss or not val_loss:
+            return
+
+        epochs_range = range(1, len(loss) + 1)
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+        # Loss subplot
+        ax1.plot(epochs_range, loss, label="Train Loss", color="#2980b9", lw=2)
+        ax1.plot(epochs_range, val_loss, label="Val Loss", color="#e67e22", lw=2)
+        if best_epoch and 1 <= best_epoch <= len(epochs_range):
+            ax1.axvline(
+                best_epoch,
+                color="#27ae60",
+                linestyle="--",
+                alpha=0.85,
+                label=f"Best Val Epoch ({best_epoch})",
+            )
+        ax1.set_title("Sparse Categorical Cross-Entropy Loss", fontsize=12, fontweight="bold")
+        ax1.set_xlabel("Epoch")
+        ax1.set_ylabel("Loss")
+        ax1.legend(loc="upper right")
+        ax1.grid(True, alpha=0.3)
+
+        # Accuracy subplot
+        if acc and val_acc:
+            ax2.plot(epochs_range, acc, label="Train Accuracy", color="#2980b9", lw=2)
+            ax2.plot(epochs_range, val_acc, label="Val Accuracy", color="#e67e22", lw=2)
+            if best_epoch and 1 <= best_epoch <= len(epochs_range):
+                ax2.axvline(
+                    best_epoch,
+                    color="#27ae60",
+                    linestyle="--",
+                    alpha=0.85,
+                    label=f"Best Val Epoch ({best_epoch})",
+                )
+            ax2.set_title("Classification Accuracy Progression", fontsize=12, fontweight="bold")
+            ax2.set_xlabel("Epoch")
+            ax2.set_ylabel("Accuracy")
+            ax2.legend(loc="lower right")
+            ax2.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        if save_path is not None:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    except Exception as e:
+        print(f"[Plotting Warning] Could not generate learning curves plot: {e}")
+
+
+def save_confusion_matrix_plot(
+    cm: np.ndarray,
+    class_names: list[str],
+    title_suffix: str = "Test Set",
+    save_path: Optional[Path] = None,
+) -> None:
+    """Generate and save side-by-side raw count and normalized recall confusion matrices."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        cm_arr = np.asarray(cm)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            row_sums = cm_arr.sum(axis=1, keepdims=True)
+            cm_norm = np.where(row_sums > 0, (cm_arr.astype("float") / row_sums) * 100.0, 0.0)
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+        # 1. Raw Counts
+        im1 = ax1.imshow(cm_arr, interpolation="nearest", cmap="Blues")
+        ax1.set_title(f"Confusion Matrix - Raw Counts ({title_suffix})", fontsize=12, fontweight="bold")
+        fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+        tick_marks = np.arange(len(class_names))
+        ax1.set_xticks(tick_marks)
+        ax1.set_xticklabels(class_names, rotation=45, ha="right", fontsize=9)
+        ax1.set_yticks(tick_marks)
+        ax1.set_yticklabels(class_names, fontsize=9)
+        ax1.set_ylabel("True Activity", fontweight="bold")
+        ax1.set_xlabel("Predicted Activity", fontweight="bold")
+        for i in range(len(class_names)):
+            for j in range(len(class_names)):
+                ax1.text(
+                    j,
+                    i,
+                    format(int(cm_arr[i, j]), "d"),
+                    ha="center",
+                    va="center",
+                    color="white" if cm_arr[i, j] > cm_arr.max() / 2 else "black",
+                )
+
+        # 2. Normalized Recall %
+        im2 = ax2.imshow(cm_norm, interpolation="nearest", cmap="Blues", vmin=0, vmax=100)
+        ax2.set_title(f"Confusion Matrix - Normalized Recall % ({title_suffix})", fontsize=12, fontweight="bold")
+        fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+        ax2.set_xticks(tick_marks)
+        ax2.set_xticklabels(class_names, rotation=45, ha="right", fontsize=9)
+        ax2.set_yticks(tick_marks)
+        ax2.set_yticklabels(class_names, fontsize=9)
+        ax2.set_ylabel("True Activity", fontweight="bold")
+        ax2.set_xlabel("Predicted Activity", fontweight="bold")
+        for i in range(len(class_names)):
+            for j in range(len(class_names)):
+                ax2.text(
+                    j,
+                    i,
+                    f"{cm_norm[i, j]:.1f}%",
+                    ha="center",
+                    va="center",
+                    color="white" if cm_norm[i, j] > 50 else "black",
+                )
+
+        plt.tight_layout()
+        if save_path is not None:
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    except Exception as e:
+        print(f"[Plotting Warning] Could not generate confusion matrix plot: {e}")
+
+
 def train_transformer_pipeline(
     config: Dict[str, Any],
     data: Optional[Dict[str, np.ndarray]] = None,
-    run_dir: Optional[str] = None,
+    run_dir: Optional[str | Path] = None,
     verbose: int = 1,
 ) -> Tuple[keras.Model, Dict[str, Any], str]:
     """Execute complete training pipeline for the Transformer model.
@@ -152,12 +294,14 @@ def train_transformer_pipeline(
     seed = int(train_cfg.get("seed", 42))
     set_seed(seed)
 
-    # 1. Setup Output Directory
+    # 1. Setup Output Directory using Pathlib
     if run_dir is None:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_out = output_cfg.get("base_dir", "outputs/transformer")
-        run_dir = os.path.join(base_out, f"run_{timestamp}")
-    os.makedirs(run_dir, exist_ok=True)
+        base_out = Path(output_cfg.get("base_dir", "outputs/transformer"))
+        run_path = base_out / f"run_{timestamp}"
+    else:
+        run_path = Path(run_dir)
+    run_path.mkdir(parents=True, exist_ok=True)
 
     # 2. Data Loading & Validation
     if data is None:
@@ -205,8 +349,8 @@ def train_transformer_pipeline(
     print(f"  Trainable parameters: {trainable_params:,}")
 
     # 4. Configure Callbacks
-    best_model_path = os.path.join(run_dir, "best_model.keras")
-    history_csv_path = os.path.join(run_dir, "history.csv")
+    best_model_path = run_path / "best_model.keras"
+    history_csv_path = run_path / "history.csv"
 
     callbacks = [
         keras.callbacks.EarlyStopping(
@@ -217,7 +361,7 @@ def train_transformer_pipeline(
             mode="min",
         ),
         keras.callbacks.ModelCheckpoint(
-            filepath=best_model_path,
+            filepath=str(best_model_path),
             monitor="val_loss",
             save_best_only=True,
             mode="min",
@@ -231,7 +375,7 @@ def train_transformer_pipeline(
             mode="min",
             verbose=1 if verbose > 0 else 0,
         ),
-        keras.callbacks.CSVLogger(history_csv_path),
+        keras.callbacks.CSVLogger(str(history_csv_path)),
     ]
 
     # 5. Execute Training
@@ -256,23 +400,21 @@ def train_transformer_pipeline(
     duration_seconds = round(end_time - start_time, 2)
 
     # 6. Save Training Artifacts
-    # Save History JSON
     history_dict = {k: [float(v) for v in vals] for k, vals in history_obj.history.items()}
-    history_json_path = os.path.join(run_dir, "history.json")
+    history_json_path = run_path / "history.json"
     with open(history_json_path, "w", encoding="utf-8") as f:
         json.dump(history_dict, f, indent=2)
 
-    # Save Resolved Config JSON
-    config_json_path = os.path.join(run_dir, "config.json")
+    config_json_path = run_path / "config.json"
     with open(config_json_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
     # Verify best model was saved; if early stopping happened before checkpoint, save current best
-    if not os.path.exists(best_model_path):
-        model.save(best_model_path)
+    if not best_model_path.exists():
+        model.save(str(best_model_path))
 
     # Test loading saved model
-    loaded_best_model = load_transformer_model(best_model_path)
+    loaded_best_model = load_transformer_model(str(best_model_path), compile=False)
 
     # Compile run metadata
     val_loss_hist = history_dict.get("val_loss", [])
@@ -303,48 +445,57 @@ def train_transformer_pipeline(
         "val_subjects": val_subjects_list,
         "num_train_samples": len(X_train),
         "num_val_samples": len(X_val),
-        "data_source": "real_npz" if data.get("subject_test", None) is not None and len(data.get("subject_test", [])) == 2947 else "custom_or_synthetic",
+        "data_source": "real_npz" if data.get("subject_test") is not None and len(data.get("subject_test")) == 2947 else "custom_or_synthetic",
         "system_info": get_system_metadata(),
-        "model_file": os.path.basename(best_model_path),
-        "history_file": os.path.basename(history_json_path),
-        "config_file": os.path.basename(config_json_path),
+        "model_file": best_model_path.name,
+        "history_file": history_json_path.name,
+        "config_file": config_json_path.name,
     }
 
-    metadata_path = os.path.join(run_dir, "run_metadata.json")
+    metadata_path = run_path / "run_metadata.json"
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
 
-    print(f"\n[Run Completed] Duration: {duration_seconds}s ({seconds_per_epoch}s/epoch) | Best Val Loss: {best_val_loss} (Epoch {best_val_loss_epoch})")
-    print(f"  Artifacts saved to: {run_dir}")
-    print(f"  - Model:     {best_model_path}")
-    print(f"  - History:   {history_json_path}, {history_csv_path}")
-    print(f"  - Metadata:  {metadata_path}")
+    # Save diagnostic learning curve plot
+    learning_curves_plot_path = run_path / "learning_curves.png"
+    save_learning_curves_plot(
+        history=history_dict,
+        best_epoch=best_val_loss_epoch,
+        save_path=learning_curves_plot_path,
+    )
 
-    return loaded_best_model, metadata, run_dir
+    print(f"\n[Run Completed] Duration: {duration_seconds}s ({seconds_per_epoch}s/epoch) | Best Val Loss: {best_val_loss} (Epoch {best_val_loss_epoch})")
+    print(f"  Artifacts saved to: {run_path.as_posix()}")
+    print(f"  - Model:     {best_model_path.as_posix()}")
+    print(f"  - History:   {history_json_path.as_posix()}, {history_csv_path.as_posix()}")
+    print(f"  - Metadata:  {metadata_path.as_posix()}")
+    if learning_curves_plot_path.exists():
+        print(f"  - Curves:    {learning_curves_plot_path.as_posix()}")
+
+    return loaded_best_model, metadata, str(run_path)
 
 
 def evaluate_transformer_on_test(
     model: keras.Model,
     data: Dict[str, np.ndarray],
-    run_dir: Optional[str] = None,
+    run_dir: Optional[str | Path] = None,
     save_artifacts: bool = True,
 ) -> Dict[str, Any]:
     """Evaluate trained Transformer on held-out test split.
 
     Calculates accuracy, macro F1, weighted F1, per-class metrics, and confusion matrix.
-    Saves test_metrics.json and predictions.npz into run_dir.
+    Saves test_metrics.json, predictions.npz, and confusion_matrix.png into run_dir.
 
     Parameters:
         model: Trained Keras Transformer model.
         data: Data dictionary containing 'X_test', 'y_test', and optionally 'subject_test'.
         run_dir: Optional directory where evaluation artifacts are saved.
-        save_artifacts: Whether to write test_metrics.json and predictions.npz.
+        save_artifacts: Whether to write test_metrics.json, predictions.npz, and plots.
 
     Returns:
         Dictionary of calculated evaluation metrics.
     """
     from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
-    from src.data_contract import ACTIVITY_LABEL_MAPPING
 
     if "X_test" not in data or "y_test" not in data:
         raise ValueError("Data dictionary must contain 'X_test' and 'y_test' for evaluation.")
@@ -357,16 +508,20 @@ def evaluate_transformer_on_test(
     y_pred = np.argmax(y_probs, axis=-1)
 
     acc = float(accuracy_score(y_test, y_pred))
-    macro_f1 = float(f1_score(y_test, y_pred, average="macro"))
-    weighted_f1 = float(f1_score(y_test, y_pred, average="weighted"))
+    macro_f1 = float(f1_score(y_test, y_pred, average="macro", zero_division=0))
+    weighted_f1 = float(f1_score(y_test, y_pred, average="weighted", zero_division=0))
 
     class_names = [ACTIVITY_LABEL_MAPPING[i] for i in range(len(ACTIVITY_LABEL_MAPPING))]
-    cm = confusion_matrix(y_test, y_pred)
+    cm = confusion_matrix(y_test, y_pred, labels=list(range(len(class_names))))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        row_sums = cm.sum(axis=1, keepdims=True)
+        cm_norm = np.where(row_sums > 0, (cm.astype("float") / row_sums) * 100.0, 0.0)
+
     clf_report_dict = classification_report(
-        y_test, y_pred, target_names=class_names, output_dict=True, digits=4
+        y_test, y_pred, target_names=class_names, output_dict=True, digits=4, zero_division=0
     )
     clf_report_str = classification_report(
-        y_test, y_pred, target_names=class_names, digits=4
+        y_test, y_pred, target_names=class_names, digits=4, zero_division=0
     )
 
     metrics = {
@@ -378,6 +533,7 @@ def evaluate_transformer_on_test(
         "test_macro_f1": macro_f1,
         "test_weighted_f1": weighted_f1,
         "confusion_matrix": cm.tolist(),
+        "confusion_matrix_normalized_percent": cm_norm.tolist(),
         "class_names": class_names,
         "classification_report": clf_report_dict,
     }
@@ -392,22 +548,34 @@ def evaluate_transformer_on_test(
     print(clf_report_str)
 
     if save_artifacts and run_dir is not None:
-        os.makedirs(run_dir, exist_ok=True)
-        metrics_path = os.path.join(run_dir, "test_metrics.json")
+        run_path = Path(run_dir)
+        run_path.mkdir(parents=True, exist_ok=True)
+        metrics_path = run_path / "test_metrics.json"
         with open(metrics_path, "w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=2)
 
-        preds_npz_path = os.path.join(run_dir, "predictions.npz")
+        preds_npz_path = run_path / "predictions.npz"
         np.savez_compressed(
-            preds_npz_path,
+            str(preds_npz_path),
             y_test=y_test,
             y_pred=y_pred,
             y_probs=y_probs,
             subject_test=subject_test if subject_test is not None else np.array([]),
         )
-        print(f"[Artifacts] Saved evaluation results to {run_dir}:")
-        print(f"  - {metrics_path}")
-        print(f"  - {preds_npz_path}")
+
+        cm_plot_path = run_path / "confusion_matrix.png"
+        save_confusion_matrix_plot(
+            cm=cm,
+            class_names=class_names,
+            title_suffix="Test Set",
+            save_path=cm_plot_path,
+        )
+
+        print(f"[Artifacts] Saved evaluation results to {run_path.as_posix()}:")
+        print(f"  - {metrics_path.as_posix()}")
+        print(f"  - {preds_npz_path.as_posix()}")
+        if cm_plot_path.exists():
+            print(f"  - {cm_plot_path.as_posix()}")
 
     return metrics
 

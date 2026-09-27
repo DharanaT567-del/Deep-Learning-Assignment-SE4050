@@ -375,11 +375,12 @@ def compile_transformer_model(
     return model
 
 
-def load_transformer_model(filepath: str) -> keras.Model:
+def load_transformer_model(filepath: str, compile: bool = True) -> keras.Model:
     """Safely load a serialized .keras Transformer model with custom layer registry.
 
     Parameters:
         filepath: Path to the saved .keras model file.
+        compile: Whether to compile the model upon loading (default: True).
 
     Returns:
         keras.Model: Loaded Keras model ready for inference or fine-tuning.
@@ -388,7 +389,8 @@ def load_transformer_model(filepath: str) -> keras.Model:
         "TrainablePositionalEmbedding": TrainablePositionalEmbedding,
         "TransformerEncoderBlock": TransformerEncoderBlock,
     }
-    return models.load_model(filepath, custom_objects=custom_objects)
+    return models.load_model(filepath, custom_objects=custom_objects, compile=compile)
+
 
 
 def predict_transformer(

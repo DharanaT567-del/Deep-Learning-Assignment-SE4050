@@ -282,6 +282,7 @@ class TestTrainingPipeline(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(run_dir, "history.csv")))
         self.assertTrue(os.path.exists(os.path.join(run_dir, "config.json")))
         self.assertTrue(os.path.exists(os.path.join(run_dir, "run_metadata.json")))
+        self.assertTrue(os.path.exists(os.path.join(run_dir, "learning_curves.png")))
 
         # Check metadata contents
         with open(os.path.join(run_dir, "run_metadata.json"), "r", encoding="utf-8") as f:
@@ -358,6 +359,8 @@ class TestTrainingPipeline(unittest.TestCase):
         self.assertIn("confusion_matrix", metrics)
         self.assertTrue(os.path.exists(os.path.join(eval_dir, "test_metrics.json")))
         self.assertTrue(os.path.exists(os.path.join(eval_dir, "predictions.npz")))
+        self.assertTrue(os.path.exists(os.path.join(eval_dir, "confusion_matrix.png")))
+
 
 
 if __name__ == "__main__":
