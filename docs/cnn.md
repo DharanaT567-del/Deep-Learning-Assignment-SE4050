@@ -1,4 +1,4 @@
-# 1D-CNN — Training Notes (Member 2)
+# 1D-CNN — Training Notes (vdrperera)
 
 ## Architecture
 See `src/models/cnn.py` for full implementation. Summary:
@@ -21,4 +21,15 @@ See `src/models/cnn.py` for full implementation. Summary:
 - Training time: 55.27s total (~4.3s/epoch)
 
 ## Tuning experiments
-(to be added — testing kernel_size and dropout variants)
+
+| Variant | Parameters | Best Epoch | Val Loss | Val Accuracy | Train Time |
+|---|---|---|---|---|---|
+| kernel_size=5 (baseline) | 66,502 | 3 | 0.3215 | **90.43%** | 55.3s |
+| kernel_size=3 | 57,158 | 3 | **0.3175** | 88.21% | 52.7s |
+
+kernel_size=3 achieves a marginally lower validation loss with ~14% fewer parameters, 
+but a noticeably lower validation accuracy than kernel_size=5. Since accuracy is the 
+primary metric for this classification task and the difference is meaningful (~2.2 
+points), **kernel_size=5 is selected as the final configuration**. The smaller kernel 
+may struggle slightly more to capture the footstep-length patterns in the dynamic 
+activities, which typically span more than 3 time steps within the 128-step window.
