@@ -1,5 +1,6 @@
 from typing import Tuple
 
+import numpy as np
 from keras import layers, models
 import keras
 
@@ -102,3 +103,26 @@ def load_cnn_model(filepath: str) -> keras.Model:
         keras.Model: Loaded Keras model ready for inference or fine-tuning.
     """
     return models.load_model(filepath)
+
+
+def predict_cnn(
+    model: keras.Model,
+    x: np.ndarray,
+    batch_size: int = 64,
+) -> np.ndarray:
+    """Generate activity probabilities using the trained CNN model.
+
+    Parameters:
+        model: Trained Keras model.
+        x: Input sensor windows shaped (N, 128, 9).
+        batch_size: Inference batch size.
+
+    Returns:
+        np.ndarray: Class probabilities shaped (N, 6) summing to 1.0.
+    """
+    x_arr = np.asarray(x, dtype=np.float32)
+    if x_arr.ndim != 3 or x_arr.shape[1:] != (128, 9):
+        raise ValueError(
+            f"Expected input array shaped (N, 128, 9), but received shape {x_arr.shape}."
+        )
+    return model.predict(x_arr, batch_size=batch_size, verbose=0)
