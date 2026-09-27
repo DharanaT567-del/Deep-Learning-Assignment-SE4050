@@ -91,3 +91,14 @@ def build_cnn_model(
 
     model = models.Model(inputs=inputs, outputs=outputs, name=name)
     return compile_cnn_model(model, learning_rate=learning_rate)
+
+def load_cnn_model(filepath: str) -> keras.Model:
+    """Load a saved .keras CNN model (built-in layers only, kept for API symmetry).
+
+    Parameters:
+        filepath: Path to the saved .keras model file.
+
+    Returns:
+        keras.Model: Loaded Keras model ready for inference or fine-tuning.
+    """
+    return models.load_model(filepath)
