@@ -122,10 +122,10 @@ The benchmark is executed in [`notebooks/model_comparison.ipynb`](../notebooks/m
 
 | Model Architecture | Lead Member | Test Accuracy | Macro F1 | Weighted F1 | Macro ROC-AUC | Trainable Params | Latency (ms/100) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Bidirectional LSTM** | Vishwa | **89.48%** | **0.8937** | **0.8942** | 0.9852 | 145,350 | 28.51 |
-| **Hybrid CNN-LSTM** | **Monal (Author)** | **89.28%** | **0.8927** | **0.8925** | **0.9881** | **52,230** | **18.45** |
-| **1D-CNN Baseline** | Disandu | 85.78% | 0.8490 | 0.8549 | 0.9764 | 66,502 | 44.81 |
-| **Transformer Encoder** | Dharana | 85.10% | 0.8478 | 0.8514 | 0.9712 | 80,454 | 73.01 |
+| **1D-CNN Baseline** | Disandu | **91.04%** | **0.9106** | **0.9103** | **0.9893** | 66,502 | **33.47** |
+| **Bidirectional LSTM** | Vishwa | 89.11% | 0.8900 | 0.8906 | 0.9846 | 145,350 | 184.65 |
+| **Hybrid CNN-LSTM** | **Monal (Author)** | **88.87%** | **0.8872** | **0.8885** | **0.9881** | **52,230** | **89.01** |
+| **Transformer Encoder** | Dharana | 85.48% | 0.8520 | 0.8558 | 0.9756 | 80,454 | 288.78 |
 
 ### Key Observations:
 1. **CNN-LSTM Parameter Efficiency:** The Hybrid CNN-LSTM achieves within $0.5\% - 1.0\%$ accuracy of the Transformer while utilizing **37% fewer parameters** than the Transformer and **65% fewer parameters** than the BiLSTM.

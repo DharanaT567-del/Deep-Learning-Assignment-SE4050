@@ -43,10 +43,10 @@ The standardized evaluation notebook (`notebooks/model_comparison.ipynb`) execut
 
 | Model Architecture | Lead Member | Parameters | Training Time (s) | Test Accuracy | Macro F1 | Weighted F1 | Macro ROC-AUC | Latency (ms/100) |
 | :--- | :--- | ---: | ---: | :---: | :---: | :---: | :---: | ---: |
-| **Bidirectional LSTM** | Vishwa | 145,350 | 37.30 | **89.48%** | **0.8937** | **0.8942** | 0.9852 | 28.51 |
-| **Hybrid CNN-LSTM** | **Monal (Author)** | **52,230** | **28.53** | **89.28%** | **0.8927** | **0.8925** | **0.9881** | **18.45** |
-| **1D-CNN Baseline** | Disandu | 66,502 | 16.10 | 85.78% | 0.8490 | 0.8549 | 0.9764 | 44.81 |
-| **Transformer Encoder** | Dharana | 80,454 | 30.36 | 85.10% | 0.8478 | 0.8514 | 0.9712 | 73.01 |
+| **1D-CNN Baseline** | Disandu | 66,502 | 119.71 | **91.04%** | **0.9106** | **0.9103** | **0.9893** | **33.47** |
+| **Bidirectional LSTM** | Vishwa | 145,350 | 480.17 | 89.11% | 0.8900 | 0.8906 | 0.9846 | 184.65 |
+| **Hybrid CNN-LSTM** | **Monal (Author)** | **52,230** | **147.97** | **88.87%** | **0.8872** | **0.8885** | **0.9881** | **89.01** |
+| **Transformer Encoder** | Dharana | 80,454 | 770.06 | 85.48% | 0.8520 | 0.8558 | 0.9756 | 288.78 |
 
 ---
 
