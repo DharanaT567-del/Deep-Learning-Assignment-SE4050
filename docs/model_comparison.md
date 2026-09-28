@@ -89,11 +89,16 @@ Where $C = 6$ activity classes, and $P_c, R_c$ are the per-class Precision and R
 $$\text{Weighted } F_1 = \sum_{c=1}^{C} \left(\frac{N_c}{N}\right) F_{1, c}$$
 Accounts for slight class imbalances in the test split ($N_c / N$) to reflect real-world population-weighted performance.
 
-### 3.4. Parameter Count & Memory Footprint
+### 3.4. Multiclass One-vs-Rest ROC-AUC Score
+$$\text{Macro ROC-AUC} = \frac{1}{C} \sum_{c=1}^{C} \text{AUC}_c$$
+Where $\text{AUC}_c$ is computed by treating class $c$ as the positive class against all other $C-1$ classes combined (One-vs-Rest / OvR).
+* **Why it matters:** Accuracy and F1-score evaluate decisions at an arbitrary single operating point (the $\arg\max$ decision threshold). ROC-AUC evaluates the model's true probabilistic ranking capability across all possible decision thresholds, measuring how effectively the model separates positive activity instances from background noise.
+
+### 3.5. Parameter Count & Memory Footprint
 * **Count:** Measured directly from Keras model graphs using `model.count_params()`.
 * **Why it matters:** Smartwatches and fitness trackers (e.g., STM32, ESP32, Apple Watch S-series) have strict SRAM and Flash constraints (often $<512\text{ KB}$ SRAM). A model with millions of parameters is non-viable for always-on on-device activity inference regardless of accuracy.
 
-### 3.5. Inference Latency (ms per sample)
+### 3.6. Inference Latency (ms per sample)
 * **Measurement:** Timed forward pass over the 2,947 test windows averaged over multiple runs.
 * **Why it matters:** IMU sensors stream samples at 50 Hz (1 sample every 20 ms). With a 50% overlap on a 128-sample window (2.56 seconds), a new classification is required every **1.28 seconds**. Any model taking $<50\text{ ms}$ easily satisfies real-time execution, but lower latency translates directly to reduced CPU/NPU awake time and extended battery life.
 
@@ -107,7 +112,7 @@ Accounts for slight class imbalances in the test split ($N_c / N$) to reflect re
 | **Temporal Receptive Field** | Local ($k \times \text{layers}$) | Full Sequence ($128$ timesteps) | Global (All pairs $128 \times 128$) | Multi-Scale (Local $k=3$ downsampled to $T=64$, then global LSTM) |
 | **Inductive Bias** | Translation invariance, local temporal correlation | Sequential ordering, Markovian state transitions | Permutation invariant (relies strictly on positional embeddings) | Hierarchical: local motion primitives $\to$ long-range activity states |
 | **Computational Scaling** | $\mathcal{O}(T \cdot K \cdot C)$ (Linear, highly parallel) | $\mathcal{O}(T \cdot d^2)$ (Sequential, non-parallel) | $\mathcal{O}(T^2 \cdot d)$ (Quadratic in sequence length) | $\mathcal{O}(\frac{T}{2} \cdot d^2)$ (Efficient recurrence on halved sequence) |
-| **Typical Parameter Count** | $\approx 35\text{K} - 55\text{K}$ | $\approx 140\text{K} - 170\text{K}$ | $\approx 75\text{K} - 90\text{K}$ | $\approx 50\text{K} - 52\text{K}$ |
+| **Typical Parameter Count** | $\approx 66.5\text{K}$ | $\approx 145.3\text{K}$ | $\approx 80.5\text{K}$ | $\approx 52.2\text{K}$ |
 
 ---
 
@@ -115,12 +120,12 @@ Accounts for slight class imbalances in the test split ($N_c / N$) to reflect re
 
 The benchmark is executed in [`notebooks/model_comparison.ipynb`](../notebooks/model_comparison.ipynb). All metrics are evaluated on the exact same 2,947 test samples:
 
-| Model Architecture | Lead Member | Test Accuracy | Macro F1 | Weighted F1 | Trainable Params | Relative Size vs BiLSTM |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Transformer Encoder** | Dharana | 89.5% – 91.2% | 0.892 – 0.910 | 0.895 – 0.911 | ~81,000 | ~56% of BiLSTM |
-| **Hybrid CNN-LSTM** | **Monal (Author)** | **88.9% – 90.1%** | **0.887 – 0.899** | **0.888 – 0.900** | **~50,566** | **~35% of BiLSTM** |
-| **Bidirectional LSTM** | Vishwa | 88.0% – 89.8% | 0.878 – 0.895 | 0.880 – 0.897 | ~144,000 | 100% (Baseline) |
-| **1D-CNN Baseline** | Disandu | 86.5% – 88.2% | 0.861 – 0.879 | 0.864 – 0.881 | ~42,000 | ~29% of BiLSTM |
+| Model Architecture | Lead Member | Test Accuracy | Macro F1 | Weighted F1 | Macro ROC-AUC | Trainable Params | Latency (ms/100) |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Bidirectional LSTM** | Vishwa | **89.48%** | **0.8937** | **0.8942** | 0.9852 | 145,350 | 28.51 |
+| **Hybrid CNN-LSTM** | **Monal (Author)** | **89.28%** | **0.8927** | **0.8925** | **0.9881** | **52,230** | **18.45** |
+| **1D-CNN Baseline** | Disandu | 85.78% | 0.8490 | 0.8549 | 0.9764 | 66,502 | 44.81 |
+| **Transformer Encoder** | Dharana | 85.10% | 0.8478 | 0.8514 | 0.9712 | 80,454 | 73.01 |
 
 ### Key Observations:
 1. **CNN-LSTM Parameter Efficiency:** The Hybrid CNN-LSTM achieves within $0.5\% - 1.0\%$ accuracy of the Transformer while utilizing **37% fewer parameters** than the Transformer and **65% fewer parameters** than the BiLSTM.

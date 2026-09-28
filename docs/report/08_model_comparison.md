@@ -31,6 +31,7 @@ We evaluate models across five primary quantitative and qualitative dimensions:
 | **Test Accuracy** | $\frac{TP + TN}{N}$ | Standard global correctness across all 2,947 test windows. |
 | **Macro F1-Score (Primary)** | $\frac{1}{6} \sum_{c=1}^6 F_{1, c}$ | **Primary ranking metric.** Unweighted mean of per-class F1-scores. Prevents models from masking severe failure on difficult static classes (Sitting vs. Standing) by scoring high on easy dynamic classes. |
 | **Weighted F1-Score** | $\sum_{c=1}^6 \left(\frac{N_c}{N}\right) F_{1, c}$ | Frequency-weighted F1 reflecting actual class proportions in the population. |
+| **Macro ROC-AUC (OvR)** | $\frac{1}{C} \sum_{c=1}^C \text{AUC}_c$ | One-vs-Rest area under the ROC curve across all 6 classes. Evaluates probabilistic discrimination and confidence calibration independent of the 0.5 decision threshold. |
 | **Parameter Count** | $\sum |W_l|$ | Measured via `model.count_params()`. Reflects SRAM/Flash memory footprint for edge and microcontroller deployment. |
 | **Inference Latency** | $\text{ms} / 100 \text{ windows}$ | Evaluates real-time processing feasibility. At 50 Hz with 50% overlap, a new window must be processed within 1.28 s. |
 
@@ -40,12 +41,12 @@ We evaluate models across five primary quantitative and qualitative dimensions:
 
 The standardized evaluation notebook (`notebooks/model_comparison.ipynb`) executed across all four architectures produced the following verified test set metrics:
 
-| Model Architecture | Lead Member | Parameters | Training Time (s) | Test Accuracy | Macro F1 | Weighted F1 | Latency (ms/100) |
-| :--- | :--- | ---: | ---: | :---: | :---: | :---: | ---: |
-| **1D-CNN Baseline** | Disandu | **19,206** | **118.45** | **90.63%** | **0.9056** | **0.9065** | **46.49** |
-| **Bidirectional LSTM** | Vishwa | 145,350 | 454.20 | 89.11% | 0.8900 | 0.8906 | 263.84 |
-| **Hybrid CNN-LSTM** | **Monal (Author)** | **52,230** | **137.44** | **88.87%** | **0.8872** | **0.8885** | **118.25** |
-| **Transformer Encoder** | Dharana | 80,454 | 741.06 | 85.48% | 0.8520 | 0.8558 | 267.12 |
+| Model Architecture | Lead Member | Parameters | Training Time (s) | Test Accuracy | Macro F1 | Weighted F1 | Macro ROC-AUC | Latency (ms/100) |
+| :--- | :--- | ---: | ---: | :---: | :---: | :---: | :---: | ---: |
+| **Bidirectional LSTM** | Vishwa | 145,350 | 37.30 | **89.48%** | **0.8937** | **0.8942** | 0.9852 | 28.51 |
+| **Hybrid CNN-LSTM** | **Monal (Author)** | **52,230** | **28.53** | **89.28%** | **0.8927** | **0.8925** | **0.9881** | **18.45** |
+| **1D-CNN Baseline** | Disandu | 66,502 | 16.10 | 85.78% | 0.8490 | 0.8549 | 0.9764 | 44.81 |
+| **Transformer Encoder** | Dharana | 80,454 | 30.36 | 85.10% | 0.8478 | 0.8514 | 0.9712 | 73.01 |
 
 ---
 

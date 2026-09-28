@@ -127,9 +127,10 @@ To systematically explore architectural trade-offs, three variants were trained 
 1. **Validation Loss Superiority:** The Baseline architecture achieved the lowest validation loss (**0.3573** vs 0.4176 for Lightweight and 0.3649 for Deeper Recurrent), indicating superior probability calibration.
 2. **Diminishing Returns of Stacking LSTMs:** Adding a second recurrent layer increased parameter count by 63% (from 52K to 85K) and almost doubled training duration without yielding a validation loss improvement.
 3. **Selection:** The **Baseline variant** was chosen as the primary model. On the 9 unseen test subjects (2,947 samples), the model achieved:
-   * **Test Accuracy:** **88.87%**
-   * **Macro F1-Score:** **0.8872**
-   * **Weighted F1-Score:** **0.8885**
+   * **Test Accuracy:** **88.87%** (Standalone test) / **89.28%** (4-model benchmark)
+   * **Macro F1-Score:** **0.8872** / **0.8927**
+   * **Weighted F1-Score:** **0.8885** / **0.8925**
+   * **Macro ROC-AUC (OvR):** **0.9881**
 
 ---
 
