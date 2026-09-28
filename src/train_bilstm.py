@@ -1,14 +1,3 @@
-"""Training pipeline for Dharana's Transformer Component on HAR dataset.
-
-This script manages:
-1. Seed setting for reproducibility (Python, NumPy, TensorFlow).
-2. Data contract validation and leakage prevention.
-3. Transformer model construction and compilation.
-4. Keras callbacks: EarlyStopping, ModelCheckpoint (.keras), ReduceLROnPlateau, CSVLogger.
-5. Structured run outputs: best_model.keras, history.json, history.csv, config.json, run_metadata.json.
-6. Support for both real NPZ data and synthetic smoke validation.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -23,7 +12,6 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-# Compatible import of Keras / TensorFlow Keras
 try:
     import keras
     import tensorflow as tf
@@ -31,36 +19,48 @@ except ImportError:
     import tensorflow as tf
     from tensorflow import keras
 
-# Adjust Python path for direct script execution
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.data_contract import (
-    DataContractValidationError,
     generate_synthetic_har_data,
     load_har_npz,
     validate_har_dataset,
 )
-from src.models.transformer import (
-    build_transformer_classifier,
-    compile_transformer_model,
-    load_transformer_model,
-    predict_transformer,
-)
+from src.models.bilstm import build_bilstm_model, load_bilstm_model
 
 
 def set_seed(seed: int = 42) -> None:
-    """Set seeds across Python random, NumPy, and TensorFlow for reproducibility."""
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
     tf.random.set_seed(seed)
 
 
+def augment_batch(
+    x: tf.Tensor,
+    jitter_std: float = 0.05,
+    scale_std: float = 0.1,
+    max_shift: int = 8,
+) -> tf.Tensor:
+    x = tf.convert_to_tensor(x, dtype=tf.float32)
+    shape = tf.shape(x)
+    n, t, c = shape[0], shape[1], shape[2]
+
+    if jitter_std > 0:
+        x = x + tf.random.normal(shape, stddev=jitter_std)
+    if scale_std > 0:
+        x = x * tf.random.normal((n, 1, c), mean=1.0, stddev=scale_std)
+    if max_shift > 0:
+        shifts = tf.random.uniform((n, 1), minval=-max_shift, maxval=max_shift + 1, dtype=tf.int32)
+        idx = tf.math.floormod(tf.range(t)[tf.newaxis, :] - shifts, t)
+        x = tf.gather(x, idx, batch_dims=1)
+    return x
+
+
 def get_system_metadata() -> Dict[str, Any]:
-    """Capture environment, framework versions, and hardware device information."""
     devices = tf.config.list_physical_devices()
     gpus = tf.config.list_physical_devices("GPU")
     return {
@@ -76,23 +76,19 @@ def get_system_metadata() -> Dict[str, Any]:
 
 
 def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
-    """Load JSON config or fall back to default configuration values."""
     default_config: Dict[str, Any] = {
         "model": {
             "seq_len": 128,
             "num_features": 9,
-            "d_model": 64,
-            "num_heads": 4,
-            "key_dim": 16,
-            "num_layers": 2,
-            "d_ff": 128,
-            "ffn_activation": "gelu",
-            "dropout_rate": 0.2,
+            "lstm_units": 64,
+            "n_layers": 2,
+            "dropout": 0.4,
             "dense_units": 64,
             "num_classes": 6,
+            "pooling": "last",
         },
         "training": {
-            "learning_rate": 0.001,
+            "learning_rate": 0.0005,
             "batch_size": 64,
             "epochs": 60,
             "seed": 42,
@@ -100,13 +96,17 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
             "reduce_lr_patience": 5,
             "reduce_lr_factor": 0.5,
             "min_lr": 1e-6,
+            "augment": False,
+            "aug_jitter_std": 0.05,
+            "aug_scale_std": 0.1,
+            "aug_max_shift": 8,
         },
         "data": {
             "npz_path": "data/uci_har_processed.npz",
             "normalize": False,
         },
         "output": {
-            "base_dir": "outputs/transformer",
+            "base_dir": "outputs/bilstm",
         },
     }
 
@@ -122,23 +122,12 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     return default_config
 
 
-def train_transformer_pipeline(
+def train_bilstm_pipeline(
     config: Dict[str, Any],
     data: Optional[Dict[str, np.ndarray]] = None,
     run_dir: Optional[str] = None,
     verbose: int = 1,
 ) -> Tuple[keras.Model, Dict[str, Any], str]:
-    """Execute complete training pipeline for the Transformer model.
-
-    Parameters:
-        config: Full configuration dictionary.
-        data: Optional preloaded data dictionary matching the HAR contract.
-        run_dir: Explicit output directory (defaults to timestamped folder under base_dir).
-        verbose: Verbosity mode (0=silent, 1=progress bar, 2=one line per epoch).
-
-    Returns:
-        (best_model, run_metadata, run_dir_path)
-    """
     model_cfg = config.get("model", {})
     train_cfg = config.get("training", {})
     data_cfg = config.get("data", {})
@@ -147,26 +136,27 @@ def train_transformer_pipeline(
     seed = int(train_cfg.get("seed", 42))
     set_seed(seed)
 
-    # 1. Setup Output Directory
     if run_dir is None:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_out = output_cfg.get("base_dir", "outputs/transformer")
+        base_out = output_cfg.get("base_dir", "outputs/bilstm")
         run_dir = os.path.join(base_out, f"run_{timestamp}")
     os.makedirs(run_dir, exist_ok=True)
 
-    # 2. Data Loading & Validation
+    data_source = "provided"
     if data is None:
         npz_path = data_cfg.get("npz_path", "data/uci_har_processed.npz")
         if os.path.exists(npz_path):
             print(f"[Data] Loading dataset from '{npz_path}'...")
             data = load_har_npz(npz_path, normalize=bool(data_cfg.get("normalize", False)))
+            data_source = npz_path
         else:
             print(f"[Data] No dataset found at '{npz_path}'. Generating synthetic HAR data for smoke test...")
             data = generate_synthetic_har_data(seed=seed)
+            data_source = "synthetic"
 
-    # Ensure dataset strictly meets the shared data contract
     validate_har_dataset(data)
 
+    # Only train/val are read below; X_test is reserved for the final evaluation
     X_train = data["X_train"]
     y_train = data["y_train"]
     subject_train = data["subject_train"]
@@ -178,15 +168,23 @@ def train_transformer_pipeline(
     train_subjects_list = sorted([int(s) for s in np.unique(subject_train)])
     val_subjects_list = sorted([int(s) for s in np.unique(subject_val)])
 
-    print(f"[Data Contract] Validated successfully.")
+    print("[Data Contract] Validated successfully.")
     print(f"  Train windows: {len(X_train)} (Subjects: {train_subjects_list})")
     print(f"  Val windows:   {len(X_val)} (Subjects: {val_subjects_list})")
     print(f"  Input window shape: {X_train.shape[1:]}")
 
-    # 3. Build & Compile Model
-    model = build_transformer_classifier(config=model_cfg)
-    learning_rate = float(train_cfg.get("learning_rate", 0.001))
-    model = compile_transformer_model(model, learning_rate=learning_rate)
+    learning_rate = float(train_cfg.get("learning_rate", 0.0005))
+    model = build_bilstm_model(
+        input_shape=(int(model_cfg.get("seq_len", 128)), int(model_cfg.get("num_features", 9))),
+        n_classes=int(model_cfg.get("num_classes", 6)),
+        lstm_units=int(model_cfg.get("lstm_units", 64)),
+        n_layers=int(model_cfg.get("n_layers", 2)),
+        dropout=float(model_cfg.get("dropout", 0.4)),
+        dense_units=int(model_cfg.get("dense_units", 64)),
+        learning_rate=learning_rate,
+        seed=seed,
+        pooling=str(model_cfg.get("pooling", "last")),
+    )
 
     total_params = int(model.count_params())
     trainable_params = int(sum(np.prod(w.shape) for w in model.trainable_weights))
@@ -196,7 +194,6 @@ def train_transformer_pipeline(
     print(f"  Total parameters:     {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
 
-    # 4. Configure Callbacks
     best_model_path = os.path.join(run_dir, "best_model.keras")
     history_csv_path = os.path.join(run_dir, "history.csv")
 
@@ -226,76 +223,99 @@ def train_transformer_pipeline(
         keras.callbacks.CSVLogger(history_csv_path),
     ]
 
-    # 5. Execute Training
     batch_size = int(train_cfg.get("batch_size", 64))
     epochs = int(train_cfg.get("epochs", 60))
+    augment = bool(train_cfg.get("augment", False))
 
     start_time = time.time()
     start_iso = datetime.datetime.now().isoformat()
 
-    print(f"[Training] Starting training: epochs={epochs}, batch_size={batch_size}, lr={learning_rate}...")
-    history_obj = model.fit(
-        X_train,
-        y_train,
-        validation_data=(X_val, y_val),
-        epochs=epochs,
-        batch_size=batch_size,
-        callbacks=callbacks,
-        verbose=verbose,
+    print(
+        f"[Training] Starting training: epochs={epochs}, batch_size={batch_size}, "
+        f"lr={learning_rate}, augment={augment}..."
     )
+    if augment:
+        # Augment training batches only; validation data is passed through unchanged
+        jitter_std = float(train_cfg.get("aug_jitter_std", 0.05))
+        scale_std = float(train_cfg.get("aug_scale_std", 0.1))
+        max_shift = int(train_cfg.get("aug_max_shift", 8))
+        train_ds = (
+            tf.data.Dataset.from_tensor_slices((X_train.astype(np.float32), y_train))
+            .shuffle(len(X_train), seed=seed, reshuffle_each_iteration=True)
+            .batch(batch_size)
+            .map(
+                lambda xb, yb: (augment_batch(xb, jitter_std, scale_std, max_shift), yb),
+                num_parallel_calls=tf.data.AUTOTUNE,
+            )
+            .prefetch(tf.data.AUTOTUNE)
+        )
+        history_obj = model.fit(
+            train_ds,
+            validation_data=(X_val, y_val),
+            epochs=epochs,
+            callbacks=callbacks,
+            verbose=verbose,
+        )
+    else:
+        history_obj = model.fit(
+            X_train,
+            y_train,
+            validation_data=(X_val, y_val),
+            epochs=epochs,
+            batch_size=batch_size,
+            callbacks=callbacks,
+            verbose=verbose,
+        )
     end_time = time.time()
     end_iso = datetime.datetime.now().isoformat()
     duration_seconds = round(end_time - start_time, 2)
 
-    # 6. Save Training Artifacts
-    # Save History JSON
     history_dict = {k: [float(v) for v in vals] for k, vals in history_obj.history.items()}
     history_json_path = os.path.join(run_dir, "history.json")
     with open(history_json_path, "w", encoding="utf-8") as f:
         json.dump(history_dict, f, indent=2)
 
-    # Save Resolved Config JSON
     config_json_path = os.path.join(run_dir, "config.json")
     with open(config_json_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
-    # Verify best model was saved; if early stopping happened before checkpoint, save current best
+    # ModelCheckpoint may not have written a file (e.g. val_loss never finite)
     if not os.path.exists(best_model_path):
         model.save(best_model_path)
 
-    # Test loading saved model
-    loaded_best_model = load_transformer_model(best_model_path)
+    loaded_best_model = load_bilstm_model(best_model_path)
 
-    # Compile run metadata
     val_loss_hist = history_dict.get("val_loss", [])
     val_acc_hist = history_dict.get("val_accuracy", [])
     best_val_loss = float(min(val_loss_hist)) if val_loss_hist else None
     best_val_loss_epoch = int(np.argmin(val_loss_hist) + 1) if val_loss_hist else None
+    best_val_acc = float(val_acc_hist[best_val_loss_epoch - 1]) if val_acc_hist else None
     final_val_acc = float(val_acc_hist[-1]) if val_acc_hist else None
-
     epochs_trained = len(history_obj.epoch)
-    seconds_per_epoch = round(duration_seconds / max(1, epochs_trained), 3)
 
     metadata: Dict[str, Any] = {
-        "author": "Dharana",
-        "component": "Transformer Encoder Classifier",
+        "author": "Member 3",
+        "component": "Bidirectional LSTM Classifier",
         "timestamp_start": start_iso,
         "timestamp_end": end_iso,
         "duration_seconds": duration_seconds,
+        "seconds_per_epoch": round(duration_seconds / max(epochs_trained, 1), 2),
         "epochs_trained": epochs_trained,
-        "seconds_per_epoch": seconds_per_epoch,
         "total_parameters": total_params,
         "trainable_parameters": trainable_params,
         "non_trainable_parameters": non_trainable_params,
         "best_val_loss": best_val_loss,
         "best_val_loss_epoch": best_val_loss_epoch,
+        "val_accuracy_at_best_epoch": best_val_acc,
         "final_val_accuracy": final_val_acc,
         "seed": seed,
+        "pooling": str(model_cfg.get("pooling", "last")),
+        "augment": augment,
+        "data_source": data_source,
         "train_subjects": train_subjects_list,
         "val_subjects": val_subjects_list,
         "num_train_samples": len(X_train),
         "num_val_samples": len(X_val),
-        "data_source": "real_npz" if data.get("subject_test", None) is not None and len(data.get("subject_test", [])) == 2947 else "custom_or_synthetic",
         "system_info": get_system_metadata(),
         "model_file": os.path.basename(best_model_path),
         "history_file": os.path.basename(history_json_path),
@@ -306,7 +326,7 @@ def train_transformer_pipeline(
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
 
-    print(f"\n[Run Completed] Duration: {duration_seconds}s ({seconds_per_epoch}s/epoch) | Best Val Loss: {best_val_loss} (Epoch {best_val_loss_epoch})")
+    print(f"\n[Run Completed] Duration: {duration_seconds}s | Best Val Loss: {best_val_loss} (Epoch {best_val_loss_epoch})")
     print(f"  Artifacts saved to: {run_dir}")
     print(f"  - Model:     {best_model_path}")
     print(f"  - History:   {history_json_path}, {history_csv_path}")
@@ -315,104 +335,14 @@ def train_transformer_pipeline(
     return loaded_best_model, metadata, run_dir
 
 
-def evaluate_transformer_on_test(
-    model: keras.Model,
-    data: Dict[str, np.ndarray],
-    run_dir: Optional[str] = None,
-    save_artifacts: bool = True,
-) -> Dict[str, Any]:
-    """Evaluate trained Transformer on held-out test split.
-
-    Calculates accuracy, macro F1, weighted F1, per-class metrics, and confusion matrix.
-    Saves test_metrics.json and predictions.npz into run_dir.
-
-    Parameters:
-        model: Trained Keras Transformer model.
-        data: Data dictionary containing 'X_test', 'y_test', and optionally 'subject_test'.
-        run_dir: Optional directory where evaluation artifacts are saved.
-        save_artifacts: Whether to write test_metrics.json and predictions.npz.
-
-    Returns:
-        Dictionary of calculated evaluation metrics.
-    """
-    from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
-    from src.data_contract import ACTIVITY_LABEL_MAPPING
-
-    if "X_test" not in data or "y_test" not in data:
-        raise ValueError("Data dictionary must contain 'X_test' and 'y_test' for evaluation.")
-
-    X_test = data["X_test"]
-    y_test = data["y_test"]
-    subject_test = data.get("subject_test", None)
-
-    y_probs = predict_transformer(model, X_test)
-    y_pred = np.argmax(y_probs, axis=-1)
-
-    acc = float(accuracy_score(y_test, y_pred))
-    macro_f1 = float(f1_score(y_test, y_pred, average="macro"))
-    weighted_f1 = float(f1_score(y_test, y_pred, average="weighted"))
-
-    class_names = [ACTIVITY_LABEL_MAPPING[i] for i in range(len(ACTIVITY_LABEL_MAPPING))]
-    cm = confusion_matrix(y_test, y_pred)
-    clf_report_dict = classification_report(
-        y_test, y_pred, target_names=class_names, output_dict=True, digits=4
-    )
-    clf_report_str = classification_report(
-        y_test, y_pred, target_names=class_names, digits=4
-    )
-
-    metrics = {
-        "author": "Dharana",
-        "component": "Transformer Encoder",
-        "num_test_samples": int(len(y_test)),
-        "test_subjects": sorted(int(s) for s in np.unique(subject_test)) if subject_test is not None else [],
-        "test_accuracy": acc,
-        "test_macro_f1": macro_f1,
-        "test_weighted_f1": weighted_f1,
-        "confusion_matrix": cm.tolist(),
-        "class_names": class_names,
-        "classification_report": clf_report_dict,
-    }
-
-    print("\n" + "=" * 60)
-    print("TRANSFORMER HELD-OUT TEST EVALUATION RESULTS")
-    print("=" * 60)
-    print(f"Test Accuracy:  {acc * 100:.2f}%")
-    print(f"Test Macro F1:  {macro_f1:.4f}")
-    print(f"Test Weighted F1: {weighted_f1:.4f}")
-    print("\nClassification Report:\n")
-    print(clf_report_str)
-
-    if save_artifacts and run_dir is not None:
-        os.makedirs(run_dir, exist_ok=True)
-        metrics_path = os.path.join(run_dir, "test_metrics.json")
-        with open(metrics_path, "w", encoding="utf-8") as f:
-            json.dump(metrics, f, indent=2)
-
-        preds_npz_path = os.path.join(run_dir, "predictions.npz")
-        np.savez_compressed(
-            preds_npz_path,
-            y_test=y_test,
-            y_pred=y_pred,
-            y_probs=y_probs,
-            subject_test=subject_test if subject_test is not None else np.array([]),
-        )
-        print(f"[Artifacts] Saved evaluation results to {run_dir}:")
-        print(f"  - {metrics_path}")
-        print(f"  - {preds_npz_path}")
-
-    return metrics
-
-
 def main() -> None:
-    """CLI entrypoint for training Dharana's Transformer component."""
     parser = argparse.ArgumentParser(
-        description="Train Transformer Encoder for Human Activity Recognition (HAR)"
+        description="Train Bidirectional LSTM for Human Activity Recognition (HAR)"
     )
     parser.add_argument(
         "--config",
         type=str,
-        default="configs/transformer.json",
+        default="configs/bilstm.json",
         help="Path to JSON configuration file",
     )
     parser.add_argument(
@@ -456,17 +386,11 @@ def main() -> None:
         action="store_true",
         help="Run short synthetic verification smoke test (2 epochs)",
     )
-    parser.add_argument(
-        "--eval-test",
-        action="store_true",
-        help="Run evaluation on test split after training completes",
-    )
 
     args = parser.parse_args()
 
     config = load_config(args.config)
 
-    # CLI Overrides
     if args.data_path:
         config["data"]["npz_path"] = args.data_path
     if args.epochs is not None:
@@ -491,16 +415,9 @@ def main() -> None:
             seed=config["training"]["seed"],
         )
     else:
-        npz_path = config.get("data", {}).get("npz_path", "data/uci_har_processed.npz")
-        if os.path.exists(npz_path):
-            data = load_har_npz(npz_path, normalize=bool(config.get("data", {}).get("normalize", False)))
-        else:
-            data = None
+        data = None
 
-    best_model, meta, run_dir = train_transformer_pipeline(config, data=data, run_dir=args.output_dir)
-
-    if args.eval_test and data is not None and "X_test" in data:
-        evaluate_transformer_on_test(best_model, data=data, run_dir=run_dir)
+    train_bilstm_pipeline(config, data=data, run_dir=args.output_dir)
 
 
 if __name__ == "__main__":
